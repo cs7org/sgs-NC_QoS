@@ -22,6 +22,10 @@ public class SGService {
         this.multipath = multipath;
     }
 
+    public List<Flow> getFlows() {
+        return flows;
+    }
+
     public String getName() {
         return name;
     }

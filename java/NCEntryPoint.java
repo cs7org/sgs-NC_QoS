@@ -4,6 +4,8 @@ import org.networkcalculus.dnc.curves.ServiceCurve;
 import org.networkcalculus.dnc.network.server_graph.Flow;
 import org.networkcalculus.dnc.network.server_graph.Server;
 import org.networkcalculus.dnc.network.server_graph.ServerGraph;
+import org.networkcalculus.dnc.tandem.analyses.SeparateFlowAnalysis;
+import org.networkcalculus.dnc.tandem.analyses.TotalFlowAnalysis;
 import py4j.GatewayServer;
 
 import java.util.ArrayList;
@@ -148,7 +150,29 @@ public class NCEntryPoint {
         }
         // Safe the server graph
         this.serverGraph = sg;
+    }
 
+    public void calculateNCDelays(){
+        System.out.printf("------ Starting NC Analysis ------%n");
+        for (SGService sgs : sgServices){
+            System.out.printf("--- Analyzing SGS \"%s\" ---%n", sgs.getName());
+            for (Flow flow : sgs.getFlows()){
+                System.out.printf("- Analyzing flow \"%s\" -%n", flow);
+                try {
+                    SeparateFlowAnalysis sfa = new SeparateFlowAnalysis(this.serverGraph);    //TODO: Check if we need to modify the TFA configuration
+                    sfa.performAnalysis(flow);
+                    System.out.println("e2e SFA SCs     : " + sfa.getLeftOverServiceCurves());
+                    System.out.println("     per server : " + sfa.getServerLeftOverBetasMapString());
+                    System.out.println("xtx per server  : " + sfa.getServerAlphasMapString());
+                    System.out.println("delay bound     : " + sfa.getDelayBound());
+                    System.out.println("backlog bound   : " + sfa.getBacklogBound());
+                } catch (Exception e) {
+                    System.out.println("SFA analysis failed");
+                    e.printStackTrace();
+                }
+
+            }
+        }
     }
 
 }
