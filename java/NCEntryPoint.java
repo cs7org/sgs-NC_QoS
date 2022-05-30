@@ -204,4 +204,114 @@ public class NCEntryPoint {
         }
     }
 
+    /**
+     * Test case which does a network calculus analysis after adding each flow.
+     * @param sg ServerGraph which includes the servers & turns already
+     * @param sgServiceList List of all available SGServices from which the flows shall be derived.
+     */
+    private void testFlowAfterFlow(ServerGraph sg, List<SGService> sgServiceList) {
+        // Get the total number of flows first
+        int maxFlow = 0;
+        for (SGService service : sgServiceList){
+            maxFlow += service.getMultipath().size();
+        }
+
+        for (int nmbFlow = 1; nmbFlow <= maxFlow; nmbFlow++) {
+            addFlowsToSG(sg, sgServiceList, nmbFlow);
+            // Safe the server graph
+            this.serverGraph = sg;
+            System.out.printf("%d Flows %n", sg.getFlows().size());
+
+            calculateNCDelays();
+
+            // Delete the flows
+            for(Flow flow : sg.getFlows()){
+                try {
+                    sg.removeFlow(flow);
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+            }
+            for (SGService service : sgServiceList){
+                service.getFlows().clear();
+            }
+        }
+    }
+
+    /**
+     * Special test case for the presentation scenario, using the "SE" service, path "F23 - S1" and
+     * the "LM" service, path "F12 - S2". Only adding those two flows, results in a stackoverflow.
+     * @param sg ServerGraph which includes the servers & turns already
+     */
+    private void testBidirectionalFlow(ServerGraph sg) {
+        {
+            SGService service = sgServices.get(0);  // "SE" service
+            // Create arrival curve with specified details
+            ArrivalCurve arrival_curve = Curve.getFactory().createTokenBucket(service.getBitrate(), service.getBucket_size());
+
+            int pathIdx = 4; // path "F23 - S1"
+            List<String> path = service.getMultipath().get(pathIdx);
+            List<Server> dncPath = new ArrayList<>();
+            List<String> edgeNodes = new ArrayList<>();
+            // Find servers along path
+            for (int i = 1; i < path.size(); i++) {  // Important: We start with the second item in the list!
+                edgeNodes.clear();
+                edgeNodes.add(path.get(i - 1));
+                edgeNodes.add(path.get(i));
+                Collections.sort(edgeNodes);    // Important for comparison
+                // Add the found edge to the dncPath
+                dncPath.add(findEdgebyNodes(edgeList, edgeNodes).getServer());
+            }
+            // Create flow and add it to the network
+            try {
+                Flow flow = sg.addFlow(arrival_curve, dncPath);
+                service.addFlow(flow);
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        }
+        {
+            SGService service = sgServices.get(3);  // "LM" service
+            // Create arrival curve with specified details
+            ArrivalCurve arrival_curve = Curve.getFactory().createTokenBucket(service.getBitrate(), service.getBucket_size());
+
+            int pathIdx = 0; // Path "F23 - S1"
+            List<String> path = service.getMultipath().get(pathIdx);
+            List<Server> dncPath = new ArrayList<>();
+            List<String> edgeNodes = new ArrayList<>();
+            // Find servers along path
+            for (int i = 1; i < path.size(); i++) {  // Important: We start with the second item in the list!
+                edgeNodes.clear();
+                edgeNodes.add(path.get(i - 1));
+                edgeNodes.add(path.get(i));
+                Collections.sort(edgeNodes);    // Important for comparison
+                // Add the found edge to the dncPath
+                dncPath.add(findEdgebyNodes(edgeList, edgeNodes).getServer());
+            }
+            // Create flow and add it to the network
+            try {
+                Flow flow = sg.addFlow(arrival_curve, dncPath);
+                service.addFlow(flow);
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        }
+        // Safe the server graph
+        this.serverGraph = sg;
+        System.out.printf("%d Flows %n", sg.getFlows().size());
+
+        calculateNCDelays();
+
+        // Delete the flows
+        for(Flow flow : sg.getFlows()){
+            try {
+                sg.removeFlow(flow);
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        }
+        for (SGService service : sgServices){
+            service.getFlows().clear();
+        }
+    }
 }
