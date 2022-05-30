@@ -1,3 +1,4 @@
+import org.networkcalculus.dnc.AnalysisConfig;
 import org.networkcalculus.dnc.curves.ArrivalCurve;
 import org.networkcalculus.dnc.curves.Curve;
 import org.networkcalculus.dnc.curves.ServiceCurve;
@@ -153,25 +154,34 @@ public class NCEntryPoint {
     }
 
     public void calculateNCDelays(){
-        System.out.printf("------ Starting NC Analysis ------%n");
-        for (SGService sgs : sgServices){
-            System.out.printf("--- Analyzing SGS \"%s\" ---%n", sgs.getName());
-            for (Flow flow : sgs.getFlows()){
-                System.out.printf("- Analyzing flow \"%s\" -%n", flow);
-                try {
-                    SeparateFlowAnalysis sfa = new SeparateFlowAnalysis(this.serverGraph);    //TODO: Check if we need to modify the TFA configuration
-                    sfa.performAnalysis(flow);
-                    System.out.println("e2e SFA SCs     : " + sfa.getLeftOverServiceCurves());
-                    System.out.println("     per server : " + sfa.getServerLeftOverBetasMapString());
-                    System.out.println("xtx per server  : " + sfa.getServerAlphasMapString());
-                    System.out.println("delay bound     : " + sfa.getDelayBound());
-                    System.out.println("backlog bound   : " + sfa.getBacklogBound());
-                } catch (Exception e) {
-                    System.out.println("SFA analysis failed");
-                    e.printStackTrace();
-                }
+        // The AnalysisConfig can be used to modify different analysis parameters, e.g. the used arrival bounding method
+        // or to enforce Multiplexing strategies on the servers.
+        AnalysisConfig configuration = new AnalysisConfig();
+        configuration.setArrivalBoundMethod(AnalysisConfig.ArrivalBoundMethod.AGGR_PBOO_CONCATENATION);
+        try {
+            System.out.printf("------ Starting NC Analysis ------%n");
+            for (SGService sgs : sgServices) {
+                System.out.printf("--- Analyzing SGS \"%s\" ---%n", sgs.getName());
+                for (Flow flow : sgs.getFlows()) {
+                    System.out.printf("- Analyzing flow \"%s\" -%n", flow);
+                    try {
+                        SeparateFlowAnalysis sfa = new SeparateFlowAnalysis(this.serverGraph, configuration);    //TODO: Check if we need to modify the TFA configuration
+                        sfa.performAnalysis(flow);
+                        System.out.println("e2e SFA SCs     : " + sfa.getLeftOverServiceCurves());
+                        System.out.println("     per server : " + sfa.getServerLeftOverBetasMapString());
+                        System.out.println("xtx per server  : " + sfa.getServerAlphasMapString());
+                        System.out.println("delay bound     : " + sfa.getDelayBound());
+                        System.out.println("backlog bound   : " + sfa.getBacklogBound());
+                    } catch (Exception e) {
+                        System.out.println("SFA analysis failed");
+                        e.printStackTrace();
+                    }
 
+                }
             }
+        }
+        catch (StackOverflowError e){
+            System.err.println("Stackoverflow error detected! Possible reason: Cyclic dependency in network.");
         }
     }
 
