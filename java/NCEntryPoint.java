@@ -121,7 +121,26 @@ public class NCEntryPoint {
         }
 
         // Add all flows to the network
-        for (SGService service : sgServices) {
+        addFlowsToSG(sg, sgServices, -1);
+        this.serverGraph = sg;
+        System.out.printf("%d Flows %n", sg.getFlows().size());
+    }
+
+    /**
+     * This function adds {@code nmbFlow} number of flows to the server graph (sg is modified in place).
+     * @param sg Servergraph to add the flows to.
+     * @param sgServiceList List of all available SGServices from which the flows shall be derived.
+     * @param nmbFlow number of flows which should be added. Use "-1" for all available flows.
+     */
+    private void addFlowsToSG(ServerGraph sg, List<SGService> sgServiceList, int nmbFlow) {
+        // Use nmbFlow = -1 to add all available flows.
+        if (nmbFlow == -1){
+            nmbFlow = Integer.MAX_VALUE;
+        }
+        // Add nmbFlow flows to the network (at most the available ones)
+        int counter = 0;
+        outerloop:
+        for (SGService service : sgServiceList) {
             // Create arrival curve with specified details, TODO: Subject to discussion
             ArrivalCurve arrival_curve = Curve.getFactory().createTokenBucket(service.getBitrate(), service.getBucket_size());
             // Iterate over every field device - server combination (aka Path)
@@ -142,15 +161,15 @@ public class NCEntryPoint {
                 try {
                     Flow flow = sg.addFlow(arrival_curve, dncPath);
                     service.addFlow(flow);
+                    if (++counter >= nmbFlow) {
+                        break outerloop;
+                    }
                 } catch (Exception e) {
                     //TODO: Exception Handling
                     throw new RuntimeException(e);
                 }
-
             }
         }
-        // Safe the server graph
-        this.serverGraph = sg;
     }
 
     public void calculateNCDelays(){
