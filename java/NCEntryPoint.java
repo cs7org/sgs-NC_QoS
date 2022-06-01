@@ -82,10 +82,11 @@ public class NCEntryPoint {
      * @param servername  server name where the service is running on
      * @param bucket_size bucket size for token bucket arrival curve modeling.
      * @param bitrate     bitrate for token bucket arrival curve modeling
+     * @param deadline    deadline of the service (in ms)
      * @param multipath   all paths which are used for the flows
      */
-    public void addSGService(String SGSName, String servername, int bucket_size, int bitrate, List<List<String>> multipath) {
-        SGService service = new SGService(SGSName, servername, bucket_size, bitrate, multipath);
+    public void addSGService(String SGSName, String servername, int bucket_size, int bitrate, double deadline, List<List<String>> multipath) {
+        SGService service = new SGService(SGSName, servername, bucket_size, bitrate, deadline, multipath);
         sgServices.add(service);
     }
 
@@ -194,22 +195,28 @@ public class NCEntryPoint {
         try {
             System.out.printf("------ Starting NC Analysis ------%n");
             for (SGService sgs : sgServices) {
+                double maxDelay = 0;
                 System.out.printf("--- Analyzing SGS \"%s\" ---%n", sgs.getName());
                 for (Flow flow : sgs.getFlows()) {
                     System.out.printf("- Analyzing flow \"%s\" -%n", flow);
                     try {
                         SeparateFlowAnalysis sfa = new SeparateFlowAnalysis(this.serverGraph, configuration);    //TODO: Check if we need to modify the TFA configuration
                         sfa.performAnalysis(flow);
-                        System.out.println("e2e SFA SCs     : " + sfa.getLeftOverServiceCurves());
-                        System.out.println("     per server : " + sfa.getServerLeftOverBetasMapString());
-                        System.out.println("xtx per server  : " + sfa.getServerAlphasMapString());
-                        System.out.println("delay bound     : " + sfa.getDelayBound());
-                        System.out.println("backlog bound   : " + sfa.getBacklogBound());
+//                        System.out.println("e2e SFA SCs     : " + sfa.getLeftOverServiceCurves());
+//                        System.out.println("     per server : " + sfa.getServerLeftOverBetasMapString());
+//                        System.out.println("xtx per server  : " + sfa.getServerAlphasMapString());
+                        System.out.printf("delay bound     : %.2f %n", sfa.getDelayBound().doubleValue());
+                        System.out.printf("backlog bound   : %.2f %n", sfa.getBacklogBound().doubleValue());
+                        // compute service max flow delay
+                        maxDelay = Math.max(sfa.getDelayBound().doubleValue(), maxDelay);
                     } catch (Exception e) {
                         System.out.println("SFA analysis failed");
                         e.printStackTrace();
                     }
-
+                }
+                System.out.printf("Max service delay for %s is %.2f (deadline: %.2f) %n", sgs.getName(), maxDelay, sgs.getDeadline());
+                if (sgs.getDeadline() <= maxDelay){
+                    System.err.printf("Service %s deadline not met (%.2f/%.2f) %n", sgs.getName(), maxDelay, sgs.getDeadline());
                 }
             }
         }

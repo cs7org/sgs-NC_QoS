@@ -11,14 +11,16 @@ public class SGService {
     private final String server;
     private final int bucket_size;
     private final int bitrate;
+    private final double deadline;
     private final List<List<String>> multipath;
     private final List<Flow> flows = new ArrayList<>();
 
-    public SGService(String name, String servername, int bucket_size, int bitrate, List<List<String>> multipath) {
+    public SGService(String name, String servername, int bucket_size, int bitrate, double deadline, List<List<String>> multipath) {
         this.name = name;
         this.server = servername;
         this.bucket_size = bucket_size;
         this.bitrate = bitrate;
+        this.deadline = deadline;
         this.multipath = multipath;
     }
 
@@ -48,5 +50,9 @@ public class SGService {
 
     public void addFlow(Flow flow) {
         flows.add(flow);
+    }
+
+    public double getDeadline() {
+        return deadline;
     }
 }
