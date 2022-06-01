@@ -6,13 +6,9 @@ import org.networkcalculus.dnc.network.server_graph.Flow;
 import org.networkcalculus.dnc.network.server_graph.Server;
 import org.networkcalculus.dnc.network.server_graph.ServerGraph;
 import org.networkcalculus.dnc.tandem.analyses.SeparateFlowAnalysis;
-import org.networkcalculus.dnc.tandem.analyses.TotalFlowAnalysis;
 import py4j.GatewayServer;
 
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.List;
+import java.util.*;
 import java.util.stream.Collectors;
 
 public class NCEntryPoint {
@@ -36,16 +32,25 @@ public class NCEntryPoint {
     }
 
     /**
-     * Retrieve all neighbors of a specific edge
+     * Retrieve all connected neigbors of a specific edge
      *
      * @param currEdge edge, for which the neighbors shall be found
      * @param edgeList list of edges to search in.
      * @return list of found neigbors.
      */
-    private static List<Edge> getAllNeighborEdges(Edge currEdge, Collection<Edge> edgeList) {
+    private static List<Edge> getAllConnectingEdges(Edge currEdge, Collection<Edge> edgeList) {
         List<Edge> targetEdgeList;
-        targetEdgeList = edgeList.stream().filter(edge -> !Collections.disjoint(currEdge.getNodes(), edge.getNodes())).collect(Collectors.toList());
-        targetEdgeList.remove(currEdge);
+        HashSet<String> currEdgeNodes = new HashSet<>(currEdge.getNodes());
+        // Check if the edges are connected. They are connected if the last node in an edge is the first node in the second node
+        // e.g. R10/R20 & R20/R30
+        // The first two comparisons: Check for connecting node
+        // The third line: Check that the two compared edges do not concern the same node pairs
+        //                 (aka are the same edge but maybe different direction)
+        targetEdgeList = edgeList.stream()
+                .filter(edge -> (edge.getNodes().get(0).equals(currEdge.getNodes().get(1)) ||
+                                 edge.getNodes().get(1).equals(currEdge.getNodes().get(0)))
+                                && !currEdgeNodes.containsAll(edge.getNodes()))
+                .collect(Collectors.toList());
         return targetEdgeList;
     }
 
@@ -102,16 +107,31 @@ public class NCEntryPoint {
             // Create service curve for this server
             ServiceCurve service_curve = Curve.getFactory().createRateLatency(edge.getBitrate(), edge.getLatency());
             // Add server (edge) with service curve to network
-            //TODO: Define Server multiplexing
-            Server serv = sg.addServer(String.join(",", edge.getNodes()), service_curve);
+            // (Important: Every "Edge"/"Server" in this Java code is unidirectional!)
+            // --> For two-way /bidirectional but independent communication (e.g. switched Ethernet) use the "addEdge"
+            // function twice with a switched order of nodes.
+            // ASSUMPTION: We have FIFO as Multiplexing strategy - maybe different in the future!
+            Server serv = sg.addServer(String.join(",", edge.getNodes()),
+                    service_curve, AnalysisConfig.Multiplexing.FIFO);
+
             // Add server to edge for future references
             edge.setServer(serv);
         }
 
         // Add the turns (connections) between the edges to the network
+        addTurnsToSG(sg);
+
+        // Add all flows to the network
+        addFlowsToSG(sg, sgServices, -1);
+        this.serverGraph = sg;
+        System.out.printf("%d Flows %n", sg.getFlows().size());
+    }
+
+    private void addTurnsToSG(ServerGraph sg) {
         for (Edge currEdge : edgeList) {
-            List<Edge> targetEdgeList = getAllNeighborEdges(currEdge, edgeList);
+            List<Edge> targetEdgeList = getAllConnectingEdges(currEdge, edgeList);
             for (Edge targetEdge : targetEdgeList) {
+                // We can just freely add one turn twice, duplicates get omitted by DiscoDNC
                 try {
                     sg.addTurn(currEdge.getServer(), targetEdge.getServer());
                 } catch (Exception e) {
@@ -119,11 +139,6 @@ public class NCEntryPoint {
                 }
             }
         }
-
-        // Add all flows to the network
-        addFlowsToSG(sg, sgServices, -1);
-        this.serverGraph = sg;
-        System.out.printf("%d Flows %n", sg.getFlows().size());
     }
 
     /**
@@ -153,7 +168,6 @@ public class NCEntryPoint {
                     edgeNodes.clear();
                     edgeNodes.add(path.get(i - 1));
                     edgeNodes.add(path.get(i));
-                    Collections.sort(edgeNodes);    // Important for comparison
                     // Add the found edge to the dncPath
                     dncPath.add(findEdgebyNodes(edgeList, edgeNodes).getServer());
                 }

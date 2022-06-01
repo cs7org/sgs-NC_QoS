@@ -15,7 +15,6 @@ public class Edge {
     public Edge(String node1, String node2, double bitrate, double latency) {
         this.nodes.add(node1);
         this.nodes.add(node2);
-        Collections.sort(this.nodes);   // sort is important for future comparisons
         this.bitrate = bitrate;
         this.latency = latency;
     }
