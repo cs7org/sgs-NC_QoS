@@ -67,8 +67,8 @@ public class NCEntryPoint {
      *
      * @param node1   first node
      * @param node2   second node
-     * @param bitrate link bitrate (the unit is to be defined by the user and is not checked by the program.)
-     * @param latency link delay
+     * @param bitrate link bitrate [Byte/s]
+     * @param latency link delay [s]
      */
     public void addEdge(String node1, String node2, double bitrate, double latency) {
         Edge newEdge = new Edge(node1, node2, bitrate, latency);
@@ -205,8 +205,8 @@ public class NCEntryPoint {
 //                        System.out.println("e2e SFA SCs     : " + sfa.getLeftOverServiceCurves());
 //                        System.out.println("     per server : " + sfa.getServerLeftOverBetasMapString());
 //                        System.out.println("xtx per server  : " + sfa.getServerAlphasMapString());
-                        System.out.printf("delay bound     : %.2f %n", sfa.getDelayBound().doubleValue());
-                        System.out.printf("backlog bound   : %.2f %n", sfa.getBacklogBound().doubleValue());
+                        System.out.printf("delay bound     : %.2fms %n", sfa.getDelayBound().doubleValue() * 1000);     // Convert s to ms
+//                        System.out.printf("backlog bound   : %.2f %n", sfa.getBacklogBound().doubleValue());
                         // compute service max flow delay
                         maxDelay = Math.max(sfa.getDelayBound().doubleValue(), maxDelay);
                     } catch (Exception e) {
@@ -214,9 +214,9 @@ public class NCEntryPoint {
                         e.printStackTrace();
                     }
                 }
-                System.out.printf("Max service delay for %s is %.2f (deadline: %.2f) %n", sgs.getName(), maxDelay, sgs.getDeadline());
-                if (sgs.getDeadline() <= maxDelay){
-                    System.err.printf("Service %s deadline not met (%.2f/%.2f) %n", sgs.getName(), maxDelay, sgs.getDeadline());
+                System.out.printf("Max service delay for %s is %.2fms (deadline: %.2fms) %n", sgs.getName(), maxDelay * 1000, sgs.getDeadline() * 1000);
+                if (sgs.getDeadline() < maxDelay){
+                    System.err.printf("Service %s deadline not met (%.2fms/%.2fms) %n", sgs.getName(), maxDelay * 1000, sgs.getDeadline() * 1000);
                 }
             }
         }
