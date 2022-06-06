@@ -14,7 +14,7 @@ import java.util.stream.Collectors;
 public class NCEntryPoint {
 
     private final List<Edge> edgeList = new ArrayList<>();
-    private final List<SGService> sgServices = new ArrayList<>();
+    private List<SGService> sgServices = new ArrayList<>();
     private ServerGraph serverGraph;
 
     public NCEntryPoint() {
@@ -187,11 +187,12 @@ public class NCEntryPoint {
         }
     }
 
-    public void calculateNCDelays(){
+    public boolean calculateNCDelays(){
         // The AnalysisConfig can be used to modify different analysis parameters, e.g. the used arrival bounding method
         // or to enforce Multiplexing strategies on the servers.
         AnalysisConfig configuration = new AnalysisConfig();
         configuration.setArrivalBoundMethod(AnalysisConfig.ArrivalBoundMethod.AGGR_PBOO_CONCATENATION);
+        boolean delayTorn = false;
         try {
             System.out.printf("------ Starting NC Analysis ------%n");
             for (SGService sgs : sgServices) {
@@ -217,11 +218,14 @@ public class NCEntryPoint {
                 System.out.printf("Max service delay for %s is %.2fms (deadline: %.2fms) %n", sgs.getName(), maxDelay * 1000, sgs.getDeadline() * 1000);
                 if (sgs.getDeadline() < maxDelay){
                     System.err.printf("Service %s deadline not met (%.2fms/%.2fms) %n", sgs.getName(), maxDelay * 1000, sgs.getDeadline() * 1000);
+                    delayTorn = true;
                 }
             }
+            return delayTorn;
         }
         catch (StackOverflowError e){
             System.err.println("Stackoverflow error detected! Possible reason: Cyclic dependency in network.");
+            return false;
         }
     }
 
@@ -255,6 +259,74 @@ public class NCEntryPoint {
             }
             for (SGService service : sgServiceList){
                 service.getFlows().clear();
+            }
+        }
+    }
+
+    /**
+     * Test case which does a network calculus analysis after adding each flow.
+     * @param sg ServerGraph which includes the servers & turns already
+     * @param sgServiceList List of all available SGServices from which the flows shall be derived.
+     */
+    private void testFlowPairs(ServerGraph sg, List<SGService> sgServiceList) {
+        // Get the total number of flows first
+        int maxFlow = 0;
+        for (SGService service : sgServiceList){
+            maxFlow += service.getMultipath().size();
+        }
+
+        List<SGService> sgServiceListPre  = new ArrayList<>();
+        // Modify "max_depth" according to the test case you want to simulate
+        recursiveCallFnc(sg, sgServiceList, sgServiceListPre, 1, 3);
+    }
+
+    /**
+     * This function is used to test different combinations of flows. The function is meant as a recursive call, initialize the {@code curr_depth} with 1.
+     * @param sg Disco server graph to use
+     * @param sgServiceList total list of SGS
+     * @param servicesCumulated List of services already accumulated by previous recursive calls. Call with empty list as initial call.
+     * @param curr_depth current recursion depth. Initialize with 1 in initial call.
+     * @param max_depth maximal recursion depth aka number of flows per combination.
+     */
+    private void recursiveCallFnc(ServerGraph sg, List<SGService> sgServiceList, List<SGService> servicesCumulated, int curr_depth, int max_depth) {
+        for (int serviceCntInner = 0; serviceCntInner < sgServiceList.size(); serviceCntInner++){
+            SGService serviceInner = sgServiceList.get(serviceCntInner);
+            // Iterate over every flow in this service in outer loop
+            for (int flowCntInner = 0; flowCntInner < serviceInner.getMultipath().size(); flowCntInner++){
+                List<String> pathInner = serviceInner.getMultipath().get(flowCntInner);
+                // Add those two to the network and calculate
+                List<List<String>> newPathListInner = new ArrayList<>();
+                newPathListInner.add(pathInner);
+                SGService serviceNewInner = new SGService(serviceInner.getName(), serviceInner.getServer(), serviceInner.getBucket_size(), serviceInner.getBitrate(), serviceInner.getDeadline(), newPathListInner);
+                // Add the two flows to the network
+                List<SGService> sgServicesCompare = new ArrayList<>(servicesCumulated);
+                sgServicesCompare.add(serviceNewInner);
+
+                if(curr_depth >= max_depth) {
+                    // Do the final computation
+                    this.sgServices = sgServicesCompare;
+                    addFlowsToSG(sg, sgServicesCompare, -1);
+                    // Safe the server graph
+                    this.serverGraph = sg;
+                    System.out.printf("%d Flows %n", sg.getFlows().size());
+
+                    calculateNCDelays();
+
+                    // Delete the flows
+                    for (Flow flow : sg.getFlows()) {
+                        try {
+                            sg.removeFlow(flow);
+                        } catch (Exception e) {
+                            throw new RuntimeException(e);
+                        }
+                    }
+                    for (SGService service : this.sgServices) {
+                        service.getFlows().clear();
+                    }
+                } else {
+                    recursiveCallFnc(sg, sgServiceList, sgServicesCompare, curr_depth + 1, max_depth);
+                }
+
             }
         }
     }
