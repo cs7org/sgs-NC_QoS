@@ -225,7 +225,7 @@ public class NCEntryPoint {
         }
         catch (StackOverflowError e){
             System.err.println("Stackoverflow error detected! Possible reason: Cyclic dependency in network.");
-            return false;
+            return true;
         }
     }
 
