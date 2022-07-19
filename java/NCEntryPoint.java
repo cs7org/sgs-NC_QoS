@@ -106,7 +106,8 @@ public class NCEntryPoint {
         // Add every edge as a server to the network
         for (Edge edge : edgeList) {
             // Create service curve for this server
-            ServiceCurve service_curve = Curve.getFactory().createRateLatency(edge.getBitrate(), edge.getLatency());
+//            ServiceCurve service_curve = Curve.getFactory().createRateLatency(edge.getBitrate(), edge.getLatency());
+            ServiceCurve service_curve = Curve.getFactory().createRateLatency(edge.getBitrate(), 0);    // Constant bit rate element
             // Add server (edge) with service curve to network
             // (Important: Every "Edge"/"Server" in this Java code is unidirectional!)
             // --> For two-way /bidirectional but independent communication (e.g. switched Ethernet) use the "addEdge"
