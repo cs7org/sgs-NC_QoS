@@ -27,16 +27,19 @@ public class NCEntryPoint {
      */
     private static class ExperimentConfig{
         public final ServiceCurveTypes serviceCurveType = ServiceCurveTypes.CBR;
+        public final boolean usePacketizer = true;
+        public final int maxPacketSize = 255; // [Byte]
         public final ArrivalCurveTypes arrivalCurveType = ArrivalCurveTypes.TokenBucket;
         public final AnalysisConfig.Multiplexing multiplexing = AnalysisConfig.Multiplexing.FIFO;
         public final AnalysisConfig.ArrivalBoundMethod arrivalBoundMethod = AnalysisConfig.ArrivalBoundMethod.AGGR_PBOO_CONCATENATION;
         public final TandemAnalysis.Analyses ncAnalysisType = TandemAnalysis.Analyses.SFA;
 
         public void outputConfig(){
-            System.out.println("Servicecurve type: " + serviceCurveType);
-            System.out.println("Arrivalcurve type: " + arrivalCurveType);
+            System.out.println("Service curve type: " + serviceCurveType);
+            System.out.println("Packetizer included: " + usePacketizer + " (" + maxPacketSize + " Byte)");
+            System.out.println("Arrival curve type: " + arrivalCurveType);
             System.out.println("Multiplexing: " + multiplexing);
-            System.out.println("Arrivalbounding method: " + arrivalBoundMethod);
+            System.out.println("Arrival bounding method: " + arrivalBoundMethod);
             System.out.println("NC Analysis type: " + ncAnalysisType);
         }
     }
@@ -141,9 +144,13 @@ public class NCEntryPoint {
         // Add every edge as a server to the network
         for (Edge edge : edgeList) {
             // Create service curve for this server
+            double packetizerBurst = 0;
+            if (experimentConfig.usePacketizer){
+                packetizerBurst = experimentConfig.maxPacketSize / edge.getBitrate();
+            }
             ServiceCurve service_curve = switch (experimentConfig.serviceCurveType) {
-                case CBR -> Curve.getFactory().createRateLatency(edge.getBitrate(), 0);    // Constant bit rate element
-                case RateLatency -> Curve.getFactory().createRateLatency(edge.getBitrate(), edge.getLatency()); // Rate-latency
+                case CBR -> Curve.getFactory().createRateLatency(edge.getBitrate(), packetizerBurst);    // Constant bit rate element
+                case RateLatency -> Curve.getFactory().createRateLatency(edge.getBitrate(), edge.getLatency() + packetizerBurst); // Rate-latency
             };
             // Add server (edge) with service curve to network
             // (Important: Every "Edge"/"Server" in this Java code is unidirectional - not bidirectional!)
