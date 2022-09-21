@@ -5,17 +5,46 @@ import org.networkcalculus.dnc.curves.ServiceCurve;
 import org.networkcalculus.dnc.network.server_graph.Flow;
 import org.networkcalculus.dnc.network.server_graph.Server;
 import org.networkcalculus.dnc.network.server_graph.ServerGraph;
-import org.networkcalculus.dnc.tandem.analyses.SeparateFlowAnalysis;
+import org.networkcalculus.dnc.tandem.TandemAnalysis;
+import org.networkcalculus.dnc.tandem.analyses.TandemMatchingAnalysis;
 import py4j.GatewayServer;
 
 import java.util.*;
 import java.util.stream.Collectors;
 
 public class NCEntryPoint {
+    enum ServiceCurveTypes {
+        CBR,
+        RateLatency
+    }
+    enum ArrivalCurveTypes {
+        TokenBucket,
+        PeakArrivalRate
+    }
+
+    /**
+     * Class used to store the experiment configurations.
+     */
+    private static class ExperimentConfig{
+        public final ServiceCurveTypes serviceCurveType = ServiceCurveTypes.CBR;
+        public final ArrivalCurveTypes arrivalCurveType = ArrivalCurveTypes.TokenBucket;
+        public final AnalysisConfig.Multiplexing multiplexing = AnalysisConfig.Multiplexing.FIFO;
+        public final AnalysisConfig.ArrivalBoundMethod arrivalBoundMethod = AnalysisConfig.ArrivalBoundMethod.AGGR_PBOO_CONCATENATION;
+        public final TandemAnalysis.Analyses ncAnalysisType = TandemAnalysis.Analyses.SFA;
+
+        public void outputConfig(){
+            System.out.println("Servicecurve type: " + serviceCurveType);
+            System.out.println("Arrivalcurve type: " + arrivalCurveType);
+            System.out.println("Multiplexing: " + multiplexing);
+            System.out.println("Arrivalbounding method: " + arrivalBoundMethod);
+            System.out.println("NC Analysis type: " + ncAnalysisType);
+        }
+    }
 
     private final List<Edge> edgeList = new ArrayList<>();
     private List<SGService> sgServices = new ArrayList<>();
     private ServerGraph serverGraph;
+    private final ExperimentConfig experimentConfig = new ExperimentConfig();
 
     public NCEntryPoint() {
     }
@@ -41,11 +70,13 @@ public class NCEntryPoint {
     private static List<Edge> getAllConnectingEdges(Edge currEdge, Collection<Edge> edgeList) {
         List<Edge> targetEdgeList;
         HashSet<String> currEdgeNodes = new HashSet<>(currEdge.getNodes());
-        // Check if the edges are connected. They are connected if the last node in an edge is the first node in the second node
-        // e.g. R10/R20 & R20/R30
-        // The first two comparisons: Check for connecting node
-        // The third line: Check that the two compared edges do not concern the same node pairs
-        //                 (aka are the same edge but maybe different direction)
+        /*
+        * Check if the edges are connected. They are connected if the last node in an edge is the first node in the second node
+        * e.g. R10/R20 & R20/R30
+        * The first two comparisons: Check for connecting node
+        * The third line: Check that the two compared edges do not concern the same node pairs
+        *                 (aka are the same edge but maybe different direction)
+        */
         targetEdgeList = edgeList.stream()
                 .filter(edge -> (edge.getNodes().get(0).equals(currEdge.getNodes().get(1)) ||
                                  edge.getNodes().get(1).equals(currEdge.getNodes().get(0)))
@@ -70,6 +101,7 @@ public class NCEntryPoint {
      * @param bitrate link bitrate [Byte/s]
      * @param latency link delay [s]
      */
+    @SuppressWarnings("unused")
     public void addEdge(String node1, String node2, double bitrate, double latency) {
         Edge newEdge = new Edge(node1, node2, bitrate, latency);
         edgeList.add(newEdge);
@@ -85,6 +117,7 @@ public class NCEntryPoint {
      * @param deadline    deadline of the service (in ms)
      * @param multipath   all paths which are used for the flows
      */
+    @SuppressWarnings("unused")
     public void addSGService(String SGSName, String servername, int bucket_size, int bitrate, double deadline, List<List<String>> multipath) {
         SGService service = new SGService(SGSName, servername, bucket_size, bitrate, deadline, multipath);
         sgServices.add(service);
@@ -93,12 +126,14 @@ public class NCEntryPoint {
     /**
      * Reset all stored values (e.g. empty edgelist)
      */
+    @SuppressWarnings("unused")
     public void resetAll() {
         edgeList.clear();
         sgServices.clear();
     }
 
     //TODO: Check for better Exception handling (here "sg.addTurn()" throws exception if servers not present etc.)
+    @SuppressWarnings("unused")
     public void createNCNetwork() {
         // Create ServerGraph - aka network
         ServerGraph sg = new ServerGraph();
@@ -106,15 +141,16 @@ public class NCEntryPoint {
         // Add every edge as a server to the network
         for (Edge edge : edgeList) {
             // Create service curve for this server
-//            ServiceCurve service_curve = Curve.getFactory().createRateLatency(edge.getBitrate(), edge.getLatency());
-            ServiceCurve service_curve = Curve.getFactory().createRateLatency(edge.getBitrate(), 0);    // Constant bit rate element
+            ServiceCurve service_curve = switch (experimentConfig.serviceCurveType) {
+                case CBR -> Curve.getFactory().createRateLatency(edge.getBitrate(), 0);    // Constant bit rate element
+                case RateLatency -> Curve.getFactory().createRateLatency(edge.getBitrate(), edge.getLatency()); // Rate-latency
+            };
             // Add server (edge) with service curve to network
-            // (Important: Every "Edge"/"Server" in this Java code is unidirectional!)
+            // (Important: Every "Edge"/"Server" in this Java code is unidirectional - not bidirectional!)
             // --> For two-way /bidirectional but independent communication (e.g. switched Ethernet) use the "addEdge"
             // function twice with a switched order of nodes.
-            // ASSUMPTION: We have FIFO as Multiplexing strategy - maybe different in the future!
             Server serv = sg.addServer(String.join(",", edge.getNodes()),
-                    service_curve, AnalysisConfig.Multiplexing.FIFO);
+                    service_curve, experimentConfig.multiplexing);
 
             // Add server to edge for future references
             edge.setServer(serv);
@@ -158,8 +194,11 @@ public class NCEntryPoint {
         int counter = 0;
         outerloop:
         for (SGService service : sgServiceList) {
-            // Create arrival curve with specified details, TODO: Subject to discussion
-            ArrivalCurve arrival_curve = Curve.getFactory().createTokenBucket(service.getBitrate(), service.getBucket_size());
+            // Create arrival curve with specified details
+            ArrivalCurve arrival_curve = switch (experimentConfig.arrivalCurveType) {
+                case TokenBucket -> Curve.getFactory().createTokenBucket(service.getBitrate(), service.getBucket_size());
+                case PeakArrivalRate -> Curve.getFactory().createPeakArrivalRate(service.getBitrate());
+            };
             // Iterate over every field device - server combination (aka Path)
             for (int pathIdx = 0; pathIdx < service.getMultipath().size(); pathIdx++) {
                 List<String> path = service.getMultipath().get(pathIdx);
@@ -188,31 +227,39 @@ public class NCEntryPoint {
         }
     }
 
+    @SuppressWarnings("UnusedReturnValue")
     public boolean calculateNCDelays(){
         // The AnalysisConfig can be used to modify different analysis parameters, e.g. the used arrival bounding method
         // or to enforce Multiplexing strategies on the servers.
         AnalysisConfig configuration = new AnalysisConfig();
-        configuration.setArrivalBoundMethod(AnalysisConfig.ArrivalBoundMethod.AGGR_PBOO_CONCATENATION);
+        configuration.setArrivalBoundMethod(experimentConfig.arrivalBoundMethod);
+        experimentConfig.outputConfig();
         boolean delayTorn = false;
         try {
-            System.out.printf("------ Starting NC Analysis ------%n");
+            System.out.printf("------ Starting NC Analysis using " + experimentConfig.ncAnalysisType + " ------%n");
             for (SGService sgs : sgServices) {
                 double maxDelay = 0;
                 System.out.printf("--- Analyzing SGS \"%s\" ---%n", sgs.getName());
-                for (Flow flow : sgs.getFlows()) {
-                    System.out.printf("- Analyzing flow \"%s\" -%n", flow);
+                for (Flow foi : sgs.getFlows()) {
+                    System.out.printf("- Analyzing flow \"%s\" -%n", foi);
                     try {
-                        SeparateFlowAnalysis sfa = new SeparateFlowAnalysis(this.serverGraph, configuration);    //TODO: Check if we need to modify the TFA configuration
-                        sfa.performAnalysis(flow);
-//                        System.out.println("e2e SFA SCs     : " + sfa.getLeftOverServiceCurves());
-//                        System.out.println("     per server : " + sfa.getServerLeftOverBetasMapString());
-//                        System.out.println("xtx per server  : " + sfa.getServerAlphasMapString());
-                        System.out.printf("delay bound     : %.2fms %n", sfa.getDelayBound().doubleValue() * 1000);     // Convert s to ms
+                        TandemAnalysis ncanalysis = switch (experimentConfig.ncAnalysisType) {
+                            case TFA -> TandemAnalysis.performTfaEnd2End(this.serverGraph, configuration, foi);
+                            case SFA -> TandemAnalysis.performSfaEnd2End(this.serverGraph, configuration, foi);
+                            case PMOO -> TandemAnalysis.performPmooEnd2End(this.serverGraph, configuration, foi);
+                            case TMA -> new TandemMatchingAnalysis(this.serverGraph, configuration);
+                        };
+                        // TMA doesn't have the conveniance function
+                        if ( experimentConfig.ncAnalysisType == TandemAnalysis.Analyses.TMA){
+                            ncanalysis.performAnalysis(foi);
+                        }
+                        // Print the end-to-end delay bound
+                        System.out.printf("delay bound     : %.2fms %n", ncanalysis.getDelayBound().doubleValue() * 1000);     // Convert s to ms
 //                        System.out.printf("backlog bound   : %.2f %n", sfa.getBacklogBound().doubleValue());
                         // compute service max flow delay
-                        maxDelay = Math.max(sfa.getDelayBound().doubleValue(), maxDelay);
+                        maxDelay = Math.max(ncanalysis.getDelayBound().doubleValue(), maxDelay);
                     } catch (Exception e) {
-                        System.out.println("SFA analysis failed");
+                        System.out.println( experimentConfig.ncAnalysisType + " analysis failed");
                         e.printStackTrace();
                     }
                 }
@@ -235,6 +282,7 @@ public class NCEntryPoint {
      * @param sg ServerGraph which includes the servers & turns already
      * @param sgServiceList List of all available SGServices from which the flows shall be derived.
      */
+    @SuppressWarnings("unused")
     private void testFlowAfterFlow(ServerGraph sg, List<SGService> sgServiceList) {
         // Get the total number of flows first
         int maxFlow = 0;
@@ -269,6 +317,7 @@ public class NCEntryPoint {
      * @param sg ServerGraph which includes the servers & turns already
      * @param sgServiceList List of all available SGServices from which the flows shall be derived.
      */
+    @SuppressWarnings("unused")
     private void testFlowPairs(ServerGraph sg, List<SGService> sgServiceList) {
         // Get the total number of flows first
         int maxFlow = 0;
@@ -337,6 +386,7 @@ public class NCEntryPoint {
      * the "LM" service, path "F12 - S2". Only adding those two flows, results in a stackoverflow.
      * @param sg ServerGraph which includes the servers & turns already
      */
+    @SuppressWarnings("unused")
     private void testBidirectionalFlow(ServerGraph sg) {
         {
             SGService service = sgServices.get(0);  // "SE" service
