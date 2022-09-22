@@ -9,6 +9,10 @@ import org.networkcalculus.dnc.tandem.TandemAnalysis;
 import org.networkcalculus.dnc.tandem.analyses.TandemMatchingAnalysis;
 import py4j.GatewayServer;
 
+import java.io.File;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.text.SimpleDateFormat;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -30,9 +34,11 @@ public class NCEntryPoint {
         public final boolean usePacketizer = true;
         public final int maxPacketSize = 255; // [Byte]
         public final ArrivalCurveTypes arrivalCurveType = ArrivalCurveTypes.TokenBucket;
-        public final AnalysisConfig.Multiplexing multiplexing = AnalysisConfig.Multiplexing.FIFO;
-        public final AnalysisConfig.ArrivalBoundMethod arrivalBoundMethod = AnalysisConfig.ArrivalBoundMethod.AGGR_PBOO_CONCATENATION;
-        public final TandemAnalysis.Analyses ncAnalysisType = TandemAnalysis.Analyses.SFA;
+        //NOTE: The multiplexing technique can be set per Server, when taking arbitrary, it will be forced globally
+        // (in calculateNCDelays)
+        public AnalysisConfig.Multiplexing multiplexing = AnalysisConfig.Multiplexing.FIFO;
+        public AnalysisConfig.ArrivalBoundMethod arrivalBoundMethod = AnalysisConfig.ArrivalBoundMethod.AGGR_PBOO_CONCATENATION;
+        public TandemAnalysis.Analyses ncAnalysisType = TandemAnalysis.Analyses.SFA;
 
         public void outputConfig(){
             System.out.println("Service curve type: " + serviceCurveType);
@@ -41,6 +47,15 @@ public class NCEntryPoint {
             System.out.println("Multiplexing: " + multiplexing);
             System.out.println("Arrival bounding method: " + arrivalBoundMethod);
             System.out.println("NC Analysis type: " + ncAnalysisType);
+        }
+        public void writeConfiginBuffer(List<String> buffer){
+            buffer.add(String.valueOf(serviceCurveType));
+            buffer.add(String.valueOf(usePacketizer));
+            buffer.add(String.valueOf(maxPacketSize));
+            buffer.add(String.valueOf(arrivalCurveType));
+            buffer.add(String.valueOf(multiplexing));
+            buffer.add(String.valueOf(arrivalBoundMethod));
+            buffer.add(String.valueOf(ncAnalysisType));
         }
     }
 
@@ -236,17 +251,29 @@ public class NCEntryPoint {
 
     @SuppressWarnings("UnusedReturnValue")
     public boolean calculateNCDelays(){
+        List<String> dummyExperimentLog = new ArrayList<>();
+        return calculateNCDelays(dummyExperimentLog);
+    }
+    @SuppressWarnings("UnusedReturnValue")
+    public boolean calculateNCDelays(List<String> experimentLog){
         // The AnalysisConfig can be used to modify different analysis parameters, e.g. the used arrival bounding method
         // or to enforce Multiplexing strategies on the servers.
         AnalysisConfig configuration = new AnalysisConfig();
         configuration.setArrivalBoundMethod(experimentConfig.arrivalBoundMethod);
+        if (experimentConfig.multiplexing == AnalysisConfig.Multiplexing.ARBITRARY) {
+            configuration.enforceMultiplexing(AnalysisConfig.MultiplexingEnforcement.GLOBAL_ARBITRARY);
+        } else {
+            configuration.enforceMultiplexing(AnalysisConfig.MultiplexingEnforcement.SERVER_LOCAL);
+        }
         experimentConfig.outputConfig();
+        experimentConfig.writeConfiginBuffer(experimentLog);
         boolean delayTorn = false;
         try {
             System.out.printf("------ Starting NC Analysis using " + experimentConfig.ncAnalysisType + " ------%n");
             for (SGService sgs : sgServices) {
                 double maxDelay = 0;
                 System.out.printf("--- Analyzing SGS \"%s\" ---%n", sgs.getName());
+                experimentLog.add(sgs.getName());
                 for (Flow foi : sgs.getFlows()) {
                     System.out.printf("- Analyzing flow \"%s\" -%n", foi);
                     try {
@@ -263,11 +290,14 @@ public class NCEntryPoint {
                         // Print the end-to-end delay bound
                         System.out.printf("delay bound     : %.2fms %n", ncanalysis.getDelayBound().doubleValue() * 1000);     // Convert s to ms
 //                        System.out.printf("backlog bound   : %.2f %n", sfa.getBacklogBound().doubleValue());
+                        experimentLog.add(String.valueOf(ncanalysis.getDelayBound().doubleValue() * 1000));
                         // compute service max flow delay
                         maxDelay = Math.max(ncanalysis.getDelayBound().doubleValue(), maxDelay);
                     } catch (Exception e) {
+                        // Here we land e.g. when we have PMOO & FIFO!
                         System.out.println( experimentConfig.ncAnalysisType + " analysis failed");
                         e.printStackTrace();
+                        experimentLog.add("-1");
                     }
                 }
                 System.out.printf("Max service delay for %s is %.2fms (deadline: %.2fms) %n", sgs.getName(), maxDelay * 1000, sgs.getDeadline() * 1000);
@@ -282,6 +312,54 @@ public class NCEntryPoint {
             System.err.println("Stackoverflow error detected! Possible reason: Cyclic dependency in network.");
             return true;
         }
+    }
+
+    /**
+     * This function tries every network analysis method, combined with every arrival bounding technique
+     * The result will be exported to the newly created folder "experiments".
+     */
+    @SuppressWarnings("unused")
+    public void experimentAllCombinations(){
+        List<String> experimentLog = new ArrayList<>();
+        for (TandemAnalysis.Analyses anaType : TandemAnalysis.Analyses.values()){
+            if (anaType == TandemAnalysis.Analyses.PMOO){
+                // PMOO doesn't support FIFO multiplexing
+                experimentConfig.multiplexing = AnalysisConfig.Multiplexing.ARBITRARY;
+            }
+            experimentConfig.ncAnalysisType = anaType;
+            for (var arrBoundType : AnalysisConfig.ArrivalBoundMethod.values()){
+                List<String> buffer = new ArrayList<>();
+                experimentConfig.arrivalBoundMethod = arrBoundType;
+                // conduct the experiment with the newly defined configurations
+                calculateNCDelays(buffer);
+                if (experimentLog.isEmpty()){
+                    experimentLog = buffer;
+                } else {
+                    // Concat the new results to form one big CSV
+                    for (int i = 0; i < experimentLog.size(); i++) {
+                        experimentLog.set(i, experimentLog.get(i) + ',' + buffer.get(i));
+                    }
+                }
+            }
+
+        }
+        // Export experimentLog to a file
+        try {
+            String fileSuffix = new SimpleDateFormat("yyyyMMddHHmmss").format(new Date());
+            // Create the experiments' subfolder, if not present
+            File directory = new File("experiments");
+            if (! directory.exists()){
+                boolean success = directory.mkdir();
+            }
+            FileWriter writer = new FileWriter("experiments/experimentLog_" + fileSuffix + ".csv");
+            for(String str: experimentLog) {
+                writer.write(str + System.lineSeparator());
+            }
+            writer.close();
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+
     }
 
     /**

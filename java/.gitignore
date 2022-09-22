@@ -26,3 +26,5 @@ hs_err_pid*
 # generated out folder
 /out/
 
+# generated folder for experiment logs
+/experiments/
