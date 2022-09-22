@@ -17,52 +17,10 @@ import java.util.*;
 import java.util.stream.Collectors;
 
 public class NCEntryPoint {
-    enum ServiceCurveTypes {
-        CBR,
-        RateLatency
-    }
-    enum ArrivalCurveTypes {
-        TokenBucket,
-        PeakArrivalRate
-    }
-
-    /**
-     * Class used to store the experiment configurations.
-     */
-    private static class ExperimentConfig{
-        public final ServiceCurveTypes serviceCurveType = ServiceCurveTypes.CBR;
-        public final boolean usePacketizer = true;
-        public final int maxPacketSize = 255; // [Byte]
-        public final ArrivalCurveTypes arrivalCurveType = ArrivalCurveTypes.TokenBucket;
-        //NOTE: The multiplexing technique can be set per Server, when taking arbitrary, it will be forced globally
-        // (in calculateNCDelays)
-        public AnalysisConfig.Multiplexing multiplexing = AnalysisConfig.Multiplexing.FIFO;
-        public AnalysisConfig.ArrivalBoundMethod arrivalBoundMethod = AnalysisConfig.ArrivalBoundMethod.AGGR_PBOO_CONCATENATION;
-        public TandemAnalysis.Analyses ncAnalysisType = TandemAnalysis.Analyses.SFA;
-
-        public void outputConfig(){
-            System.out.println("Service curve type: " + serviceCurveType);
-            System.out.println("Packetizer included: " + usePacketizer + " (" + maxPacketSize + " Byte)");
-            System.out.println("Arrival curve type: " + arrivalCurveType);
-            System.out.println("Multiplexing: " + multiplexing);
-            System.out.println("Arrival bounding method: " + arrivalBoundMethod);
-            System.out.println("NC Analysis type: " + ncAnalysisType);
-        }
-        public void writeConfiginBuffer(List<String> buffer){
-            buffer.add(String.valueOf(serviceCurveType));
-            buffer.add(String.valueOf(usePacketizer));
-            buffer.add(String.valueOf(maxPacketSize));
-            buffer.add(String.valueOf(arrivalCurveType));
-            buffer.add(String.valueOf(multiplexing));
-            buffer.add(String.valueOf(arrivalBoundMethod));
-            buffer.add(String.valueOf(ncAnalysisType));
-        }
-    }
-
     private final List<Edge> edgeList = new ArrayList<>();
+    private final ExperimentConfig experimentConfig = new ExperimentConfig();
     private List<SGService> sgServices = new ArrayList<>();
     private ServerGraph serverGraph;
-    private final ExperimentConfig experimentConfig = new ExperimentConfig();
 
     public NCEntryPoint() {
     }
@@ -79,22 +37,22 @@ public class NCEntryPoint {
     }
 
     /**
-     * Retrieve all connected neigbors of a specific edge
+     * Retrieve all connected neighbors of a specific edge
      *
      * @param currEdge edge, for which the neighbors shall be found
      * @param edgeList list of edges to search in.
-     * @return list of found neigbors.
+     * @return list of found neighbors.
      */
     private static List<Edge> getAllConnectingEdges(Edge currEdge, Collection<Edge> edgeList) {
         List<Edge> targetEdgeList;
         HashSet<String> currEdgeNodes = new HashSet<>(currEdge.getNodes());
         /*
-        * Check if the edges are connected. They are connected if the last node in an edge is the first node in the second node
-        * e.g. R10/R20 & R20/R30
-        * The first two comparisons: Check for connecting node
-        * The third line: Check that the two compared edges do not concern the same node pairs
-        *                 (aka are the same edge but maybe different direction)
-        */
+         * Check if the edges are connected. They are connected if the last node in an edge is the first node in the second node
+         * e.g. R10/R20 & R20/R30
+         * The first two comparisons: Check for connecting node
+         * The third line: Check that the two compared edges do not concern the same node pairs
+         *                 (aka are the same edge but maybe different direction --> R10/R20 & R20/R10)
+         */
         targetEdgeList = edgeList.stream()
                 .filter(edge -> (edge.getNodes().get(0).equals(currEdge.getNodes().get(1)) ||
                                  edge.getNodes().get(1).equals(currEdge.getNodes().get(0)))
@@ -112,7 +70,7 @@ public class NCEntryPoint {
     /**
      * This function is called via the py4j Gateway from the python source code.
      * Every Edge is added to the network list one by one. (The node order is not yet defined)
-     * Bitrate + latency will be later used for modeling the link as a rate-latency service curve
+     * Bitrate + latency will be later used for modeling the link as a service curve
      *
      * @param node1   first node
      * @param node2   second node
@@ -151,6 +109,11 @@ public class NCEntryPoint {
     }
 
     //TODO: Check for better Exception handling (here "sg.addTurn()" throws exception if servers not present etc.)
+
+    /**
+     * This function creates the final ServerGraph aka combines all the network elements in one network.
+     * Has to be called last, AFTER calling addEdge & addSGService for adding the network elements.
+     */
     @SuppressWarnings("unused")
     public void createNCNetwork() {
         // Create ServerGraph - aka network
@@ -160,24 +123,24 @@ public class NCEntryPoint {
         for (Edge edge : edgeList) {
             // Create service curve for this server
             double packetizerBurst = 0;
-            if (experimentConfig.usePacketizer){
+            if (experimentConfig.usePacketizer) {
                 packetizerBurst = experimentConfig.maxPacketSize / edge.getBitrate();
             }
             ServiceCurve service_curve = switch (experimentConfig.serviceCurveType) {
-                case CBR -> Curve.getFactory().createRateLatency(edge.getBitrate(), packetizerBurst);    // Constant bit rate element
-                case RateLatency -> Curve.getFactory().createRateLatency(edge.getBitrate(), edge.getLatency() + packetizerBurst); // Rate-latency
+                case CBR ->
+                        Curve.getFactory().createRateLatency(edge.getBitrate(), packetizerBurst);    // Constant bit rate element
+                case RateLatency ->
+                        Curve.getFactory().createRateLatency(edge.getBitrate(), edge.getLatency() + packetizerBurst); // Rate-latency
             };
             // Add server (edge) with service curve to network
             // (Important: Every "Edge"/"Server" in this Java code is unidirectional - not bidirectional!)
             // --> For two-way /bidirectional but independent communication (e.g. switched Ethernet) use the "addEdge"
             // function twice with a switched order of nodes.
-            Server serv = sg.addServer(String.join(",", edge.getNodes()),
-                    service_curve, experimentConfig.multiplexing);
+            Server serv = sg.addServer(String.join(",", edge.getNodes()), service_curve, experimentConfig.multiplexing);
 
             // Add server to edge for future references
             edge.setServer(serv);
         }
-
         // Add the turns (connections) between the edges to the network
         addTurnsToSG(sg);
 
@@ -187,6 +150,11 @@ public class NCEntryPoint {
         System.out.printf("%d Flows %n", sg.getFlows().size());
     }
 
+    /**
+     * Helper function for adding the turn connections between the edges into a given SererGraph
+     *
+     * @param sg SerGraph to add all the connections to.
+     */
     private void addTurnsToSG(ServerGraph sg) {
         for (Edge currEdge : edgeList) {
             List<Edge> targetEdgeList = getAllConnectingEdges(currEdge, edgeList);
@@ -203,22 +171,23 @@ public class NCEntryPoint {
 
     /**
      * This function adds {@code nmbFlow} number of flows to the server graph (sg is modified in place).
-     * @param sg Servergraph to add the flows to.
+     *
+     * @param sg            Servergraph to add the flows to.
      * @param sgServiceList List of all available SGServices from which the flows shall be derived.
-     * @param nmbFlow number of flows which should be added. Use "-1" for all available flows.
+     * @param nmbFlow       number of flows which should be added. Use "-1" for all available flows.
      */
     private void addFlowsToSG(ServerGraph sg, List<SGService> sgServiceList, int nmbFlow) {
-        // Use nmbFlow = -1 to add all available flows.
-        if (nmbFlow == -1){
+        // nmbFlow = -1 is used to add all available flows.
+        if (nmbFlow == -1) {
             nmbFlow = Integer.MAX_VALUE;
         }
         // Add nmbFlow flows to the network (at most the available ones)
         int counter = 0;
-        outerloop:
         for (SGService service : sgServiceList) {
             // Create arrival curve with specified details
             ArrivalCurve arrival_curve = switch (experimentConfig.arrivalCurveType) {
-                case TokenBucket -> Curve.getFactory().createTokenBucket(service.getBitrate(), service.getBucket_size());
+                case TokenBucket ->
+                        Curve.getFactory().createTokenBucket(service.getBitrate(), service.getBucket_size());
                 case PeakArrivalRate -> Curve.getFactory().createPeakArrivalRate(service.getBitrate());
             };
             // Iterate over every field device - server combination (aka Path)
@@ -239,7 +208,8 @@ public class NCEntryPoint {
                     Flow flow = sg.addFlow(arrival_curve, dncPath);
                     service.addFlow(flow);
                     if (++counter >= nmbFlow) {
-                        break outerloop;
+                        // Abort adding more flows
+                        return;
                     }
                 } catch (Exception e) {
                     //TODO: Exception Handling
@@ -249,17 +219,31 @@ public class NCEntryPoint {
         }
     }
 
+    /**
+     * Function called by Python part.
+     * For details see calculateNCDelays(List<String>)
+     *
+     * @return boolean if one of the delay constraints is torn
+     */
     @SuppressWarnings("UnusedReturnValue")
-    public boolean calculateNCDelays(){
+    public boolean calculateNCDelays() {
         List<String> dummyExperimentLog = new ArrayList<>();
         return calculateNCDelays(dummyExperimentLog);
     }
-    @SuppressWarnings("UnusedReturnValue")
-    public boolean calculateNCDelays(List<String> experimentLog){
+
+    /**
+     * Function to calculate the performance bounds for every flow and output the result onto the Console and into a
+     * given experimentLog
+     *
+     * @param experimentLog List<String> to add the output results into. Intended for CSV usage.
+     * @return boolean if one of the delay constraints is torn
+     */
+    public boolean calculateNCDelays(List<String> experimentLog) {
         // The AnalysisConfig can be used to modify different analysis parameters, e.g. the used arrival bounding method
         // or to enforce Multiplexing strategies on the servers.
         AnalysisConfig configuration = new AnalysisConfig();
         configuration.setArrivalBoundMethod(experimentConfig.arrivalBoundMethod);
+        // Current work-around for the experiment run
         if (experimentConfig.multiplexing == AnalysisConfig.Multiplexing.ARBITRARY) {
             configuration.enforceMultiplexing(AnalysisConfig.MultiplexingEnforcement.GLOBAL_ARBITRARY);
         } else {
@@ -284,7 +268,7 @@ public class NCEntryPoint {
                             case TMA -> new TandemMatchingAnalysis(this.serverGraph, configuration);
                         };
                         // TMA doesn't have the conveniance function
-                        if ( experimentConfig.ncAnalysisType == TandemAnalysis.Analyses.TMA){
+                        if (experimentConfig.ncAnalysisType == TandemAnalysis.Analyses.TMA) {
                             ncanalysis.performAnalysis(foi);
                         }
                         // Print the end-to-end delay bound
@@ -295,20 +279,19 @@ public class NCEntryPoint {
                         maxDelay = Math.max(ncanalysis.getDelayBound().doubleValue(), maxDelay);
                     } catch (Exception e) {
                         // Here we land e.g. when we have PMOO & FIFO!
-                        System.out.println( experimentConfig.ncAnalysisType + " analysis failed");
+                        System.out.println(experimentConfig.ncAnalysisType + " analysis failed");
                         e.printStackTrace();
                         experimentLog.add("-1");
                     }
                 }
                 System.out.printf("Max service delay for %s is %.2fms (deadline: %.2fms) %n", sgs.getName(), maxDelay * 1000, sgs.getDeadline() * 1000);
-                if (sgs.getDeadline() < maxDelay){
+                if (sgs.getDeadline() < maxDelay) {
                     System.err.printf("Service %s deadline not met (%.2fms/%.2fms) %n", sgs.getName(), maxDelay * 1000, sgs.getDeadline() * 1000);
                     delayTorn = true;
                 }
             }
             return delayTorn;
-        }
-        catch (StackOverflowError e){
+        } catch (StackOverflowError e) {
             System.err.println("Stackoverflow error detected! Possible reason: Cyclic dependency in network.");
             return true;
         }
@@ -316,23 +299,23 @@ public class NCEntryPoint {
 
     /**
      * This function tries every network analysis method, combined with every arrival bounding technique
-     * The result will be exported to the newly created folder "experiments".
+     * The result will be exported to the newly created folder "experiments" as a CSV file.
      */
     @SuppressWarnings("unused")
-    public void experimentAllCombinations(){
+    public void experimentAllCombinations() {
         List<String> experimentLog = new ArrayList<>();
-        for (TandemAnalysis.Analyses anaType : TandemAnalysis.Analyses.values()){
-            if (anaType == TandemAnalysis.Analyses.PMOO){
-                // PMOO doesn't support FIFO multiplexing
+        for (TandemAnalysis.Analyses anaType : TandemAnalysis.Analyses.values()) {
+            if ((anaType == TandemAnalysis.Analyses.PMOO) || (anaType == TandemAnalysis.Analyses.TMA)) {
+                // PMOO & TMA don't support FIFO multiplexing
                 experimentConfig.multiplexing = AnalysisConfig.Multiplexing.ARBITRARY;
             }
             experimentConfig.ncAnalysisType = anaType;
-            for (var arrBoundType : AnalysisConfig.ArrivalBoundMethod.values()){
+            for (var arrBoundType : AnalysisConfig.ArrivalBoundMethod.values()) {
                 List<String> buffer = new ArrayList<>();
                 experimentConfig.arrivalBoundMethod = arrBoundType;
                 // conduct the experiment with the newly defined configurations
                 calculateNCDelays(buffer);
-                if (experimentLog.isEmpty()){
+                if (experimentLog.isEmpty()) {
                     experimentLog = buffer;
                 } else {
                     // Concat the new results to form one big CSV
@@ -341,37 +324,36 @@ public class NCEntryPoint {
                     }
                 }
             }
-
         }
         // Export experimentLog to a file
         try {
             String fileSuffix = new SimpleDateFormat("yyyyMMddHHmmss").format(new Date());
             // Create the experiments' subfolder, if not present
             File directory = new File("experiments");
-            if (! directory.exists()){
+            if (!directory.exists()) {
                 boolean success = directory.mkdir();
             }
             FileWriter writer = new FileWriter("experiments/experimentLog_" + fileSuffix + ".csv");
-            for(String str: experimentLog) {
+            for (String str : experimentLog) {
                 writer.write(str + System.lineSeparator());
             }
             writer.close();
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
-
     }
 
     /**
      * Test case which does a network calculus analysis after adding each flow.
-     * @param sg ServerGraph which includes the servers & turns already
+     *
+     * @param sg            ServerGraph which includes the servers & turns already
      * @param sgServiceList List of all available SGServices from which the flows shall be derived.
      */
     @SuppressWarnings("unused")
     private void testFlowAfterFlow(ServerGraph sg, List<SGService> sgServiceList) {
         // Get the total number of flows first
         int maxFlow = 0;
-        for (SGService service : sgServiceList){
+        for (SGService service : sgServiceList) {
             maxFlow += service.getMultipath().size();
         }
 
@@ -384,14 +366,14 @@ public class NCEntryPoint {
             calculateNCDelays();
 
             // Delete the flows
-            for(Flow flow : sg.getFlows()){
+            for (Flow flow : sg.getFlows()) {
                 try {
                     sg.removeFlow(flow);
                 } catch (Exception e) {
                     throw new RuntimeException(e);
                 }
             }
-            for (SGService service : sgServiceList){
+            for (SGService service : sgServiceList) {
                 service.getFlows().clear();
             }
         }
@@ -399,35 +381,37 @@ public class NCEntryPoint {
 
     /**
      * Test case which does a network calculus analysis after adding each flow.
-     * @param sg ServerGraph which includes the servers & turns already
+     *
+     * @param sg            ServerGraph which includes the servers & turns already
      * @param sgServiceList List of all available SGServices from which the flows shall be derived.
      */
     @SuppressWarnings("unused")
     private void testFlowPairs(ServerGraph sg, List<SGService> sgServiceList) {
         // Get the total number of flows first
         int maxFlow = 0;
-        for (SGService service : sgServiceList){
+        for (SGService service : sgServiceList) {
             maxFlow += service.getMultipath().size();
         }
 
-        List<SGService> sgServiceListPre  = new ArrayList<>();
+        List<SGService> sgServiceListPre = new ArrayList<>();
         // Modify "max_depth" according to the test case you want to simulate
         recursiveCallFnc(sg, sgServiceList, sgServiceListPre, 1, 3);
     }
 
     /**
      * This function is used to test different combinations of flows. The function is meant as a recursive call, initialize the {@code curr_depth} with 1.
-     * @param sg Disco server graph to use
-     * @param sgServiceList total list of SGS
+     *
+     * @param sg                Disco server graph to use
+     * @param sgServiceList     total list of SGS
      * @param servicesCumulated List of services already accumulated by previous recursive calls. Call with empty list as initial call.
-     * @param curr_depth current recursion depth. Initialize with 1 in initial call.
-     * @param max_depth maximal recursion depth aka number of flows per combination.
+     * @param curr_depth        current recursion depth. Initialize with 1 in initial call.
+     * @param max_depth         maximal recursion depth aka number of flows per combination.
      */
     private void recursiveCallFnc(ServerGraph sg, List<SGService> sgServiceList, List<SGService> servicesCumulated, int curr_depth, int max_depth) {
-        for (int serviceCntInner = 0; serviceCntInner < sgServiceList.size(); serviceCntInner++){
+        for (int serviceCntInner = 0; serviceCntInner < sgServiceList.size(); serviceCntInner++) {
             SGService serviceInner = sgServiceList.get(serviceCntInner);
             // Iterate over every flow in this service in outer loop
-            for (int flowCntInner = 0; flowCntInner < serviceInner.getMultipath().size(); flowCntInner++){
+            for (int flowCntInner = 0; flowCntInner < serviceInner.getMultipath().size(); flowCntInner++) {
                 List<String> pathInner = serviceInner.getMultipath().get(flowCntInner);
                 // Add those two to the network and calculate
                 List<List<String>> newPathListInner = new ArrayList<>();
@@ -437,7 +421,7 @@ public class NCEntryPoint {
                 List<SGService> sgServicesCompare = new ArrayList<>(servicesCumulated);
                 sgServicesCompare.add(serviceNewInner);
 
-                if(curr_depth >= max_depth) {
+                if (curr_depth >= max_depth) {
                     // Do the final computation
                     this.sgServices = sgServicesCompare;
                     addFlowsToSG(sg, sgServicesCompare, -1);
@@ -461,7 +445,6 @@ public class NCEntryPoint {
                 } else {
                     recursiveCallFnc(sg, sgServiceList, sgServicesCompare, curr_depth + 1, max_depth);
                 }
-
             }
         }
     }
@@ -469,6 +452,7 @@ public class NCEntryPoint {
     /**
      * Special test case for the presentation scenario, using the "SE" service, path "F23 - S1" and
      * the "LM" service, path "F12 - S2". Only adding those two flows, results in a stackoverflow.
+     *
      * @param sg ServerGraph which includes the servers & turns already
      */
     @SuppressWarnings("unused")
@@ -532,15 +516,65 @@ public class NCEntryPoint {
         calculateNCDelays();
 
         // Delete the flows
-        for(Flow flow : sg.getFlows()){
+        for (Flow flow : sg.getFlows()) {
             try {
                 sg.removeFlow(flow);
             } catch (Exception e) {
                 throw new RuntimeException(e);
             }
         }
-        for (SGService service : sgServices){
+        for (SGService service : sgServices) {
             service.getFlows().clear();
+        }
+    }
+
+    enum ServiceCurveTypes {
+        CBR, RateLatency
+    }
+
+    enum ArrivalCurveTypes {
+        TokenBucket, PeakArrivalRate
+    }
+
+    /**
+     * Class used to store the experiment configurations.
+     */
+    private static class ExperimentConfig {
+        public final ServiceCurveTypes serviceCurveType = ServiceCurveTypes.CBR;
+        public final boolean usePacketizer = true;
+        public final int maxPacketSize = 255; // [Byte]
+        public final ArrivalCurveTypes arrivalCurveType = ArrivalCurveTypes.TokenBucket;
+        //NOTE: The multiplexing technique can be set per Server, when taking arbitrary, it will be forced globally
+        // (in calculateNCDelays)
+        public AnalysisConfig.Multiplexing multiplexing = AnalysisConfig.Multiplexing.FIFO;
+        public AnalysisConfig.ArrivalBoundMethod arrivalBoundMethod = AnalysisConfig.ArrivalBoundMethod.AGGR_PBOO_CONCATENATION;
+        public TandemAnalysis.Analyses ncAnalysisType = TandemAnalysis.Analyses.SFA;
+
+        /**
+         * Write the current experiment configuration onto the Console
+         */
+        public void outputConfig() {
+            System.out.println("Service curve type: " + serviceCurveType);
+            System.out.println("Packetizer included: " + usePacketizer + " (" + maxPacketSize + " Byte)");
+            System.out.println("Arrival curve type: " + arrivalCurveType);
+            System.out.println("Multiplexing: " + multiplexing);
+            System.out.println("Arrival bounding method: " + arrivalBoundMethod);
+            System.out.println("NC Analysis type: " + ncAnalysisType);
+        }
+
+        /**
+         * Write the current experiment configuration line by line into a buffer
+         *
+         * @param buffer Buffer to write the experiment configuration into
+         */
+        public void writeConfiginBuffer(List<String> buffer) {
+            buffer.add(String.valueOf(serviceCurveType));
+            buffer.add(String.valueOf(usePacketizer));
+            buffer.add(String.valueOf(maxPacketSize));
+            buffer.add(String.valueOf(arrivalCurveType));
+            buffer.add(String.valueOf(multiplexing));
+            buffer.add(String.valueOf(arrivalBoundMethod));
+            buffer.add(String.valueOf(ncAnalysisType));
         }
     }
 }
