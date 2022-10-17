@@ -22,6 +22,9 @@ public class NCEntryPoint {
     private List<SGService> sgServices = new ArrayList<>();
     private ServerGraph serverGraph;
 
+    private final int HIGHEST_PRIO = 0;
+    private final int LOWEST_PRIO = 2;
+
     public NCEntryPoint() {
     }
 
@@ -94,8 +97,15 @@ public class NCEntryPoint {
      * @param multipath   all paths which are used for the flows
      */
     @SuppressWarnings("unused")
-    public void addSGService(String SGSName, String servername, int bucket_size, int bitrate, double deadline, List<List<String>> multipath) {
-        SGService service = new SGService(SGSName, servername, bucket_size, bitrate, deadline, multipath);
+    public void addSGService(String SGSName, String servername, int bucket_size, int bitrate, double deadline, List<List<String>> multipath, int priority) {
+        if (priority < HIGHEST_PRIO){
+            priority = HIGHEST_PRIO;
+        }
+        if (priority > LOWEST_PRIO){
+            priority = LOWEST_PRIO;
+        }
+        FlowPriority priority_enum = FlowPriority.values()[priority];
+        SGService service = new SGService(SGSName, servername, bucket_size, bitrate, deadline, multipath, priority_enum);
         sgServices.add(service);
     }
 
@@ -416,7 +426,7 @@ public class NCEntryPoint {
                 // Add those two to the network and calculate
                 List<List<String>> newPathListInner = new ArrayList<>();
                 newPathListInner.add(pathInner);
-                SGService serviceNewInner = new SGService(serviceInner.getName(), serviceInner.getServer(), serviceInner.getBucket_size(), serviceInner.getBitrate(), serviceInner.getDeadline(), newPathListInner);
+                SGService serviceNewInner = new SGService(serviceInner.getName(), serviceInner.getServer(), serviceInner.getBucket_size(), serviceInner.getBitrate(), serviceInner.getDeadline(), newPathListInner, serviceInner.getPriority());
                 // Add the two flows to the network
                 List<SGService> sgServicesCompare = new ArrayList<>(servicesCumulated);
                 sgServicesCompare.add(serviceNewInner);
@@ -537,6 +547,13 @@ public class NCEntryPoint {
     }
 
     /**
+     * Used scheduling policy for multiple priority case
+     */
+    enum SchedulingPolicy{
+        None, SP, DRR, WRR
+    }
+
+    /**
      * Class used to store the experiment configurations.
      */
     private static class ExperimentConfig {
@@ -549,6 +566,7 @@ public class NCEntryPoint {
         public AnalysisConfig.Multiplexing multiplexing = AnalysisConfig.Multiplexing.FIFO;
         public AnalysisConfig.ArrivalBoundMethod arrivalBoundMethod = AnalysisConfig.ArrivalBoundMethod.AGGR_PBOO_CONCATENATION;
         public TandemAnalysis.Analyses ncAnalysisType = TandemAnalysis.Analyses.SFA;
+        public SchedulingPolicy schedulingPolicy = SchedulingPolicy.None;
 
         /**
          * Write the current experiment configuration onto the Console

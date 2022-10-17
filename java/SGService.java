@@ -4,8 +4,13 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Class used to store informations about a smart grid service
+ * Class used to store information about a smart grid service
  */
+
+enum FlowPriority {
+    HIGH, MEDIUM, LOW
+}
+
 public class SGService {
     private final String name;
     private final String server;
@@ -14,14 +19,16 @@ public class SGService {
     private final double deadline;
     private final List<List<String>> multipath;
     private final List<Flow> flows = new ArrayList<>();
+    private final FlowPriority priority;
 
-    public SGService(String name, String servername, int bucket_size, int bitrate, double deadline, List<List<String>> multipath) {
+    public SGService(String name, String servername, int bucket_size, int bitrate, double deadline, List<List<String>> multipath, FlowPriority priority) {
         this.name = name;
         this.server = servername;
         this.bucket_size = bucket_size;
         this.bitrate = bitrate;
         this.deadline = deadline;
         this.multipath = multipath;
+        this.priority = priority;
     }
 
     public List<Flow> getFlows() {
@@ -54,5 +61,9 @@ public class SGService {
 
     public double getDeadline() {
         return deadline;
+    }
+
+    public FlowPriority getPriority() {
+        return priority;
     }
 }
