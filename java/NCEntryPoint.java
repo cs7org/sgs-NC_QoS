@@ -16,14 +16,19 @@ import java.text.SimpleDateFormat;
 import java.util.*;
 import java.util.stream.Collectors;
 
+/**
+ * Order of calls to make for a fully functioning NC calculation:
+ * 1. addEdge() [multiple times] - Add your edges of the network to the Servergraph (Edge = Output-link of one hop)
+ * 2. addSGService() [multiple times] - Add all the SGS that will use the network. Flows are aggregated in here.
+ * 3. createNCNetwork() [once] - Create the final Servergraph with every connection in it.
+ * 4. calculateNCDelays() - Call this function for calculating the final delays per flow.
+ */
+
 public class NCEntryPoint {
     private final List<Edge> edgeList = new ArrayList<>();
     private final ExperimentConfig experimentConfig = new ExperimentConfig();
     private List<SGService> sgServices = new ArrayList<>();
     private ServerGraph serverGraph;
-
-    private final int HIGHEST_PRIO = 0;
-    private final int LOWEST_PRIO = 2;
 
     public NCEntryPoint() {
     }
@@ -98,11 +103,12 @@ public class NCEntryPoint {
      */
     @SuppressWarnings("unused")
     public void addSGService(String SGSName, String servername, int bucket_size, int bitrate, double deadline, List<List<String>> multipath, int priority) {
-        if (priority < HIGHEST_PRIO){
-            priority = HIGHEST_PRIO;
+        // 0 is always the highest priority
+        if (priority < 0){
+            priority = 0;
         }
-        if (priority > LOWEST_PRIO){
-            priority = LOWEST_PRIO;
+        if (priority >= FlowPriority.values().length){
+            priority = FlowPriority.values().length - 1;    // lowest possible priority
         }
         FlowPriority priority_enum = FlowPriority.values()[priority];
         SGService service = new SGService(SGSName, servername, bucket_size, bitrate, deadline, multipath, priority_enum);
@@ -146,10 +152,13 @@ public class NCEntryPoint {
             // (Important: Every "Edge"/"Server" in this Java code is unidirectional - not bidirectional!)
             // --> For two-way /bidirectional but independent communication (e.g. switched Ethernet) use the "addEdge"
             // function twice with a switched order of nodes.
-            Server serv = sg.addServer(String.join(",", edge.getNodes()), service_curve, experimentConfig.multiplexing);
-
-            // Add server to edge for future references
-            edge.setServer(serv);
+            for (FlowPriority prio : FlowPriority.values()){
+                String servername = String.join(",", edge.getNodes()) + prio;
+                Server serv = sg.addServer(servername, service_curve, experimentConfig.multiplexing);
+                // Add server to edge for future references
+                // IMPORTANT: The servers have to be added in ascending priority order (HIGH before MEDIUM or LOW)!
+                edge.setServer(prio, serv);
+            }
         }
         // Add the turns (connections) between the edges to the network
         addTurnsToSG(sg);
@@ -171,7 +180,10 @@ public class NCEntryPoint {
             for (Edge targetEdge : targetEdgeList) {
                 // We can just freely add one turn twice, duplicates get omitted by DiscoDNC
                 try {
-                    sg.addTurn(currEdge.getServer(), targetEdge.getServer());
+                    // Connect the NC servers according to their priorities --> No priority hoping possible!
+                    for (FlowPriority prio : FlowPriority.values()) {
+                        sg.addTurn(currEdge.getServer(prio), targetEdge.getServer(prio));
+                    }
                 } catch (Exception e) {
                     throw new RuntimeException(e);
                 }
@@ -211,7 +223,7 @@ public class NCEntryPoint {
                     edgeNodes.add(path.get(i - 1));
                     edgeNodes.add(path.get(i));
                     // Add the found edge to the dncPath
-                    dncPath.add(findEdgebyNodes(edgeList, edgeNodes).getServer());
+                    dncPath.add(findEdgebyNodes(edgeList, edgeNodes).getServer(service.getPriority()));
                 }
                 // Create flow and add it to the network
                 try {

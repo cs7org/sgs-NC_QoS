@@ -3,14 +3,6 @@ import org.networkcalculus.dnc.network.server_graph.Flow;
 import java.util.ArrayList;
 import java.util.List;
 
-/**
- * Class used to store information about a smart grid service
- */
-
-enum FlowPriority {
-    HIGH, MEDIUM, LOW
-}
-
 public class SGService {
     private final String name;
     private final String server;
