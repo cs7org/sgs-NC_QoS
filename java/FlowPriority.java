@@ -3,5 +3,6 @@
  */
 
 public enum FlowPriority {
+    // Important: Priorities have to be declared in decreasing order!
     HIGH, MEDIUM, LOW
 }

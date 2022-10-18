@@ -100,6 +100,7 @@ public class NCEntryPoint {
      * @param bitrate     bitrate for token bucket arrival curve modeling
      * @param deadline    deadline of the service (in ms)
      * @param multipath   all paths which are used for the flows
+     * @param priority    Priority of the SGS, the highest priority is 0
      */
     @SuppressWarnings("unused")
     public void addSGService(String SGSName, String servername, int bucket_size, int bitrate, double deadline, List<List<String>> multipath, int priority) {
@@ -137,24 +138,16 @@ public class NCEntryPoint {
 
         // Add every edge as a server to the network
         for (Edge edge : edgeList) {
-            // Create service curve for this server
-            double packetizerBurst = 0;
-            if (experimentConfig.usePacketizer) {
-                packetizerBurst = experimentConfig.maxPacketSize / edge.getBitrate();
-            }
-            ServiceCurve service_curve = switch (experimentConfig.serviceCurveType) {
-                case CBR ->
-                        Curve.getFactory().createRateLatency(edge.getBitrate(), packetizerBurst);    // Constant bit rate element
-                case RateLatency ->
-                        Curve.getFactory().createRateLatency(edge.getBitrate(), edge.getLatency() + packetizerBurst); // Rate-latency
-            };
+            // Create the service curve according to the current configuration settings
+            List<ServiceCurve> service_curves = createServiceCurves(edge, experimentConfig, FlowPriority.values().length);
             // Add server (edge) with service curve to network
             // (Important: Every "Edge"/"Server" in this Java code is unidirectional - not bidirectional!)
             // --> For two-way /bidirectional but independent communication (e.g. switched Ethernet) use the "addEdge"
             // function twice with a switched order of nodes.
-            for (FlowPriority prio : FlowPriority.values()){
+            for (int i = 0; i < FlowPriority.values().length; i++) {
+                FlowPriority prio = FlowPriority.values()[i];
                 String servername = String.join(",", edge.getNodes()) + prio;
-                Server serv = sg.addServer(servername, service_curve, experimentConfig.multiplexing);
+                Server serv = sg.addServer(servername, service_curves.get(i), experimentConfig.multiplexing);
                 // Add server to edge for future references
                 // IMPORTANT: The servers have to be added in ascending priority order (HIGH before MEDIUM or LOW)!
                 edge.setServer(prio, serv);
@@ -167,6 +160,98 @@ public class NCEntryPoint {
         addFlowsToSG(sg, sgServices, -1);
         this.serverGraph = sg;
         System.out.printf("%d Flows %n", sg.getFlows().size());
+    }
+
+    private List<ServiceCurve> createServiceCurves(Edge edge, ExperimentConfig expConfig, int noPrios) {
+        // Define base service curve for this server
+        double rate;
+        double latency = 0;
+        List<ServiceCurve> serviceCurves = new ArrayList<>();
+
+        switch (expConfig.schedulingPolicy){
+            case None -> {
+                // model the link simply as a combination of the packet burst + link rate
+                if (expConfig.usePacketizer) {
+                    latency = expConfig.maxPacketSize / edge.getBitrate();
+                }
+                rate = edge.getBitrate();
+                if (expConfig.serviceCurveType == ServiceCurveTypes.RateLatency){
+                    //TODO: Talk with Kai-Steffen if we should delete that
+                    latency += edge.getLatency();
+                }
+                for (int i = 0; i < noPrios; i++) {
+                    serviceCurves.add(Curve.getFactory().createRateLatency(rate, latency));
+                }
+            }
+            case SP -> {
+                // The strict priority service curve is the link-service curve - the cross-traffic arrival
+                // ==> The cross-traffic subtraction is done at other ends
+                rate = edge.getBitrate();
+                if (expConfig.usePacketizer) {
+                    //  The packetized SP is b_SP = b - a - l_max [- l_max]
+                    //  One (- l_max) because we have to wait for the lower priority packet which gets served
+                    //  --> not for the lowest priority
+                    //  And one (- l_max) to account for the packetizer (transmission delay)
+                    latency = expConfig.maxPacketSize / edge.getBitrate();
+                }
+                // latency is 0 for non-packetized SP
+                for (int i = 0; i < noPrios - 1; i++) {
+                    // For all priorities unequal the lowest priority, b = b - a - l_max*2
+                    serviceCurves.add(Curve.getFactory().createRateLatency(rate, 2*latency));
+                }
+                // For the lowest priority it would only be one time l_max (transmission delay)
+                serviceCurves.add(Curve.getFactory().createRateLatency(rate, latency));
+            }
+            case WFQ -> {
+                if (expConfig.usePacketizer){   // PGPS aka WFQ
+                    // 1 * l_max for waiting to be scheduled + 1 * l_max for packetizer
+                    latency = (2 * expConfig.maxPacketSize) / edge.getBitrate();
+                }
+                // From here it is simple GPS, PGPS just accounts for the latency component
+                // GPS just splits the link-rate among the priorities.
+                // Weights according to the experimentConfiguration
+
+                // Calculate the sum of all flow weights for percentage calculation
+                double sumWeights = Arrays.stream(expConfig.flowWeights).sum();
+                // Iterate over every flow priority and define service curve as w_i /Ew * r
+                for (int i = 0; i < noPrios; i++) {
+                    rate =  (expConfig.flowWeights[i]/sumWeights) * edge.getBitrate();
+                    serviceCurves.add(Curve.getFactory().createRateLatency(rate, latency));
+                }
+            }
+            case DRR -> {
+                // Deficit Round Robin is always packetized
+                // see eq. 3.34
+                int l_max = expConfig.maxPacketSize;
+                int L = l_max * noPrios;
+                double F = Arrays.stream(expConfig.flowQuantils).sum();
+                double C = edge.getBitrate();
+                for (int i = 0; i < noPrios; i++) {
+                    int Q_i = expConfig.flowQuantils[i];
+
+                    // added Q_i/Q_i simplification into eq 3.34 for this formulation.
+                    latency = ((Q_i * (L- l_max)) + ((F-Q_i)*(Q_i + l_max)) + (Q_i*l_max)) / (Q_i * C);
+                    rate =  (Q_i / F) * C;
+                    serviceCurves.add(Curve.getFactory().createRateLatency(rate, latency));
+                }
+            }
+            case WRR -> {
+                // Weighted Round Robin is always packetized, there is no unpacketized version!
+                // see Eq. 3.32
+                int l_min = expConfig.minPacketSize;
+                int l_max = expConfig.maxPacketSize;
+                for (int i = 0; i < noPrios; i++) {
+                    int w_i = expConfig.flowWeights[i];
+                    double q_i = w_i * l_min;
+                    double Q_i = (Arrays.stream(expConfig.flowWeights).sum() - w_i) * l_max;
+
+                    latency = (Q_i + l_max) / edge.getBitrate();
+                    rate =  (q_i / (q_i + Q_i)) * edge.getBitrate();
+                    serviceCurves.add(Curve.getFactory().createRateLatency(rate, latency));
+                }
+            }
+        }
+        return serviceCurves;
     }
 
     /**
@@ -568,7 +653,7 @@ public class NCEntryPoint {
      * Used scheduling policy for multiple priority case
      */
     enum SchedulingPolicy{
-        None, SP, DRR, WRR
+        None, SP, WFQ, DRR, WRR
     }
 
     /**
@@ -579,13 +664,17 @@ public class NCEntryPoint {
         public final boolean usePacketizer = true;
         public final double propagationDelay = 0.5E-6; // 0.5 us, but has to be defined in [s]
         public final int maxPacketSize = 255; // [Byte]
+        public final int minPacketSize = 255; // [Byte]  //TODO: Change me
         public final ArrivalCurveTypes arrivalCurveType = ArrivalCurveTypes.TokenBucket;
         //NOTE: The multiplexing technique can be set per Server, when taking arbitrary, it will be forced globally
         // (in calculateNCDelays)
         public AnalysisConfig.Multiplexing multiplexing = AnalysisConfig.Multiplexing.FIFO;
         public AnalysisConfig.ArrivalBoundMethod arrivalBoundMethod = AnalysisConfig.ArrivalBoundMethod.AGGR_PBOO_CONCATENATION;
         public TandemAnalysis.Analyses ncAnalysisType = TandemAnalysis.Analyses.SFA;
-        public SchedulingPolicy schedulingPolicy = SchedulingPolicy.None;
+        public SchedulingPolicy schedulingPolicy = SchedulingPolicy.DRR;
+        public int[] flowWeights = {1, 1, 1};   // Flow weights in the order [H, M, L] - used for WFQ & WRR
+        public final int[] flowQuantils = {maxPacketSize, maxPacketSize, maxPacketSize}; // Flow quantils, used by DRR
+
 
         /**
          * Write the current experiment configuration onto the Console
@@ -596,6 +685,9 @@ public class NCEntryPoint {
             System.out.println("Propagation delay: " + propagationDelay);
             System.out.println("Arrival curve type: " + arrivalCurveType);
             System.out.println("Multiplexing: " + multiplexing);
+            System.out.println("Scheduling policy: " + schedulingPolicy);
+            System.out.println("Flow weights: " + Arrays.toString(flowWeights));
+            System.out.println("Flow quantils: " + Arrays.toString(flowQuantils));
             System.out.println("Arrival bounding method: " + arrivalBoundMethod);
             System.out.println("NC Analysis type: " + ncAnalysisType);
         }
@@ -612,6 +704,9 @@ public class NCEntryPoint {
             buffer.add(String.valueOf(propagationDelay));
             buffer.add(String.valueOf(arrivalCurveType));
             buffer.add(String.valueOf(multiplexing));
+            buffer.add(String.valueOf(schedulingPolicy));
+            buffer.add(Arrays.toString(flowWeights));
+            buffer.add(Arrays.toString(flowQuantils));
             buffer.add(String.valueOf(arrivalBoundMethod));
             buffer.add(String.valueOf(ncAnalysisType));
         }
