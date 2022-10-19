@@ -289,16 +289,22 @@ public class NCEntryPoint {
                             case PMOO -> TandemAnalysis.performPmooEnd2End(this.serverGraph, configuration, foi);
                             case TMA -> new TandemMatchingAnalysis(this.serverGraph, configuration);
                         };
-                        // TMA doesn't have the conveniance function
+                        // TMA doesn't have the convenience function
                         if (experimentConfig.ncAnalysisType == TandemAnalysis.Analyses.TMA) {
                             ncanalysis.performAnalysis(foi);
                         }
+                        // Get the foi delay
+                        double foi_delay = ncanalysis.getDelayBound().doubleValue(); // delay is in s
+                        // Calculate propagation delay (if no propagation delay is desired, configuration value is set to 0)
+                        double prop_delay = experimentConfig.propagationDelay * foi.getPath().numServers();
+                        // Add propagation delay to delay bound
+                        foi_delay += prop_delay;
                         // Print the end-to-end delay bound
-                        System.out.printf("delay bound     : %.2fms %n", ncanalysis.getDelayBound().doubleValue() * 1000);     // Convert s to ms
+                        System.out.printf("delay bound     : %.2fms %n", foi_delay * 1000);     // Convert s to ms
 //                        System.out.printf("backlog bound   : %.2f %n", sfa.getBacklogBound().doubleValue());
-                        experimentLog.add(String.valueOf(ncanalysis.getDelayBound().doubleValue() * 1000));
+                        experimentLog.add(String.valueOf(foi_delay * 1000));
                         // compute service max flow delay
-                        maxDelay = Math.max(ncanalysis.getDelayBound().doubleValue(), maxDelay);
+                        maxDelay = Math.max(foi_delay, maxDelay);
                     } catch (Exception e) {
                         // Here we land e.g. when we have PMOO & FIFO!
                         System.out.println(experimentConfig.ncAnalysisType + " analysis failed");
@@ -571,6 +577,7 @@ public class NCEntryPoint {
     private static class ExperimentConfig {
         public final ServiceCurveTypes serviceCurveType = ServiceCurveTypes.CBR;
         public final boolean usePacketizer = true;
+        public final double propagationDelay = 0.5E-6; // 0.5 us, but has to be defined in [s]
         public final int maxPacketSize = 255; // [Byte]
         public final ArrivalCurveTypes arrivalCurveType = ArrivalCurveTypes.TokenBucket;
         //NOTE: The multiplexing technique can be set per Server, when taking arbitrary, it will be forced globally
@@ -586,6 +593,7 @@ public class NCEntryPoint {
         public void outputConfig() {
             System.out.println("Service curve type: " + serviceCurveType);
             System.out.println("Packetizer included: " + usePacketizer + " (" + maxPacketSize + " Byte)");
+            System.out.println("Propagation delay: " + propagationDelay);
             System.out.println("Arrival curve type: " + arrivalCurveType);
             System.out.println("Multiplexing: " + multiplexing);
             System.out.println("Arrival bounding method: " + arrivalBoundMethod);
@@ -601,6 +609,7 @@ public class NCEntryPoint {
             buffer.add(String.valueOf(serviceCurveType));
             buffer.add(String.valueOf(usePacketizer));
             buffer.add(String.valueOf(maxPacketSize));
+            buffer.add(String.valueOf(propagationDelay));
             buffer.add(String.valueOf(arrivalCurveType));
             buffer.add(String.valueOf(multiplexing));
             buffer.add(String.valueOf(arrivalBoundMethod));
