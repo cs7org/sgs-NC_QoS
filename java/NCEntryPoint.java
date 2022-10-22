@@ -69,12 +69,6 @@ public class NCEntryPoint {
         return targetEdgeList;
     }
 
-    public static void main(String[] args) {
-        GatewayServer gatewayServer = new GatewayServer(new NCEntryPoint());
-        gatewayServer.start();
-        System.out.println("Gateway Server Started");
-    }
-
     /**
      * This function is called via the py4j Gateway from the python source code.
      * Every Edge is added to the network list one by one. (The node order is not yet defined)
@@ -710,5 +704,39 @@ public class NCEntryPoint {
             buffer.add(String.valueOf(arrivalBoundMethod));
             buffer.add(String.valueOf(ncAnalysisType));
         }
+    }
+
+    /**
+     * Function used to conduct tests for the service curves of a simple one hop, two server network
+     * The following results should be acquired (same result for SFA & PMOO):
+     * SP:
+     *  SFA: 6375ms
+     *  TFA: 8925ms
+     * WFQ (all weights = 1, 3 priorities, l_max = 255)
+     *  SFA: 8925ms
+     *  TFA: 14662.5ms
+     * WRR (all weights = 1, 3 priorities, l_min = l_max = 255)
+     *  SFA: 11475ms
+     * DRR (all Q_i = 1*l_max = 255, 3 priorities)
+     *  SFA: 21675ms
+     */
+    @SuppressWarnings("unused")
+    private static void testSimpleNetwork(){
+        NCEntryPoint entryPoint = new NCEntryPoint();
+        entryPoint.addEdge("F1", "H1", 200, 10);
+        entryPoint.addEdge("H1", "S1", 200, 10);
+
+        List<List<String>> path_list = new ArrayList<>();
+        path_list.add(Arrays.asList("F1", "H1" , "S1" ));
+
+        entryPoint.addSGService("SGTest", "S1", 255, 50, 1000, path_list, 0);
+        entryPoint.createNCNetwork();
+        entryPoint.calculateNCDelays();
+    }
+
+    public static void main(String[] args) {
+        GatewayServer gatewayServer = new GatewayServer(new NCEntryPoint());
+        gatewayServer.start();
+        System.out.println("Gateway Server Started");
     }
 }
