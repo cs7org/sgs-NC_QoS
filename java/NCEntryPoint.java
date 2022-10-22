@@ -132,8 +132,16 @@ public class NCEntryPoint {
 
         // Add every edge as a server to the network
         for (Edge edge : edgeList) {
-            // Create the service curve according to the current configuration settings
-            List<ServiceCurve> service_curves = createServiceCurves(edge, experimentConfig, FlowPriority.values().length);
+            List<String> edgeNodes = edge.getNodes();
+            List<ServiceCurve> service_curves;
+            // When a field device is involved, only a simple service curve shall be created instead of a scheduling one.
+            if (edgeNodes.get(0).contains("F") || edgeNodes.get(1).contains("F")){
+                service_curves = createSimpleServiceCurves(edge, experimentConfig, FlowPriority.values().length);
+            }
+            else {
+                // Create the service curve according to the current configuration settings
+                service_curves = createServiceCurves(edge, experimentConfig, FlowPriority.values().length);
+            }
             // Add server (edge) with service curve to network
             // (Important: Every "Edge"/"Server" in this Java code is unidirectional - not bidirectional!)
             // --> For two-way /bidirectional but independent communication (e.g. switched Ethernet) use the "addEdge"
@@ -156,27 +164,22 @@ public class NCEntryPoint {
         System.out.printf("%d Flows %n", sg.getFlows().size());
     }
 
-    private List<ServiceCurve> createServiceCurves(Edge edge, ExperimentConfig expConfig, int noPrios) {
+    /**
+     * Create noPrios service curves for one edge, according to the scheduling
+     * and other configuration parameters defined in expConfig
+     * @param edge      Edge for which the service curves shall be created. Needed for bitrate
+     * @param expConfig Experiment config to use, including priorities and scheduling parameters
+     * @param noPrios   number of priority service curves shall be created
+     * @return          List of Service curves in increasing priority order
+     */
+    private static List<ServiceCurve> createServiceCurves(Edge edge, ExperimentConfig expConfig, int noPrios) {
         // Define base service curve for this server
         double rate;
         double latency = 0;
         List<ServiceCurve> serviceCurves = new ArrayList<>();
 
         switch (expConfig.schedulingPolicy){
-            case None -> {
-                // model the link simply as a combination of the packet burst + link rate
-                if (expConfig.usePacketizer) {
-                    latency = expConfig.maxPacketSize / edge.getBitrate();
-                }
-                rate = edge.getBitrate();
-                if (expConfig.serviceCurveType == ServiceCurveTypes.RateLatency){
-                    //TODO: Talk with Kai-Steffen if we should delete that
-                    latency += edge.getLatency();
-                }
-                for (int i = 0; i < noPrios; i++) {
-                    serviceCurves.add(Curve.getFactory().createRateLatency(rate, latency));
-                }
-            }
+            case None -> serviceCurves = createSimpleServiceCurves(edge, expConfig, noPrios);
             case SP -> {
                 // The strict priority service curve is the link-service curve - the cross-traffic arrival
                 // ==> The cross-traffic subtraction is done at other ends
@@ -244,6 +247,32 @@ public class NCEntryPoint {
                     serviceCurves.add(Curve.getFactory().createRateLatency(rate, latency));
                 }
             }
+        }
+        return serviceCurves;
+    }
+
+    /**
+     * Create noPrios simple service curves for one edge, not taking any scheduling algorithm into account
+     * @param edge      Edge for which the service curves shall be created. Needed for bitrate
+     * @param expConfig Experiment config to use, including priorities and scheduling parameters
+     * @param noPrios   number of service curves which shall be created
+     * @return          List of Service curves in increasing priority order
+     */
+    private static List<ServiceCurve> createSimpleServiceCurves(Edge edge, ExperimentConfig expConfig, int noPrios) {
+        double latency = 0;
+        List<ServiceCurve> serviceCurves = new ArrayList<>();
+        // model the link simply as a combination of the packet burst + link rate
+        if (expConfig.usePacketizer) {
+            latency = expConfig.maxPacketSize / edge.getBitrate();
+        }
+
+        if (expConfig.serviceCurveType == ServiceCurveTypes.RateLatency){
+            //TODO: Talk with Kai-Steffen if we should delete that
+            latency += edge.getLatency();
+        }
+        double rate = edge.getBitrate();
+        for (int i = 0; i < noPrios; i++) {
+            serviceCurves.add(Curve.getFactory().createRateLatency(rate, latency));
         }
         return serviceCurves;
     }
@@ -710,15 +739,15 @@ public class NCEntryPoint {
      * Function used to conduct tests for the service curves of a simple one hop, two server network
      * The following results should be acquired (same result for SFA & PMOO):
      * SP:
-     *  SFA: 6375ms
-     *  TFA: 8925ms
+     *  SFA: 5100ms
+     *  TFA: 6693,75ms
      * WFQ (all weights = 1, 3 priorities, l_max = 255)
-     *  SFA: 8925ms
-     *  TFA: 14662.5ms
+     *  SFA: 7650ms
+     *  TFA: 9881,25ms
      * WRR (all weights = 1, 3 priorities, l_min = l_max = 255)
-     *  SFA: 11475ms
+     *  SFA: 8925ms
      * DRR (all Q_i = 1*l_max = 255, 3 priorities)
-     *  SFA: 21675ms
+     *  SFA: 14025ms
      */
     @SuppressWarnings("unused")
     private static void testSimpleNetwork(){
