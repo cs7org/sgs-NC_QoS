@@ -58,4 +58,7 @@ public class SGService {
     public FlowPriority getPriority() {
         return priority;
     }
+    public void resetFlowList(){
+        this.flows.clear();
+    }
 }

@@ -159,7 +159,7 @@ public class NCEntryPoint {
         addTurnsToSG(sg);
 
         // Add all flows to the network
-        addFlowsToSG(sg, sgServices, -1);
+        addFlowsToSG(sg, sgServices, -1, true);
         this.serverGraph = sg;
         System.out.printf("%d Flows %n", sg.getFlows().size());
     }
@@ -305,8 +305,9 @@ public class NCEntryPoint {
      * @param sg            Servergraph to add the flows to.
      * @param sgServiceList List of all available SGServices from which the flows shall be derived.
      * @param nmbFlow       number of flows which should be added. Use "-1" for all available flows.
+     * @param considerPrios If the flows shall be added to different servers of an edge, according to their priority
      */
-    private void addFlowsToSG(ServerGraph sg, List<SGService> sgServiceList, int nmbFlow) {
+    private void addFlowsToSG(ServerGraph sg, List<SGService> sgServiceList, int nmbFlow, boolean considerPrios) {
         // nmbFlow = -1 is used to add all available flows.
         if (nmbFlow == -1) {
             nmbFlow = Integer.MAX_VALUE;
@@ -331,7 +332,11 @@ public class NCEntryPoint {
                     edgeNodes.add(path.get(i - 1));
                     edgeNodes.add(path.get(i));
                     // Add the found edge to the dncPath
-                    dncPath.add(findEdgebyNodes(edgeList, edgeNodes).getServer(service.getPriority()));
+                    if (considerPrios) {
+                        dncPath.add(findEdgebyNodes(edgeList, edgeNodes).getServer(service.getPriority()));
+                    } else {
+                        dncPath.add(findEdgebyNodes(edgeList, edgeNodes).getServer());
+                    }
                 }
                 // Create flow and add it to the network
                 try {
@@ -384,6 +389,9 @@ public class NCEntryPoint {
         boolean delayTorn = false;
         try {
             System.out.printf("------ Starting NC Analysis using " + experimentConfig.ncAnalysisType + " ------%n");
+            if(experimentConfig.schedulingPolicy == ExperimentConfig.SchedulingPolicy.SP){
+                return calculate_SP_Delays(configuration, experimentConfig, experimentLog);
+            }
             for (SGService sgs : sgServices) {
                 double maxDelay = 0;
                 System.out.printf("--- Analyzing SGS \"%s\" ---%n", sgs.getName());
@@ -431,6 +439,90 @@ public class NCEntryPoint {
             System.err.println("Stackoverflow error detected! Possible reason: Cyclic dependency in network.");
             return true;
         }
+    }
+
+    private boolean calculate_SP_Delays(AnalysisConfig analysisConfig, ExperimentConfig experimentConfig, List<String> experimentLog) {
+        // First: Delete all present flows from the serverGraph
+        try {
+            removeFlows();
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+        // Procedure: add highest prio, calculate delay. Add next prio, calculate again
+        boolean highest_prio_finished = false;
+        boolean delayTorn = false;
+        for (FlowPriority prio : FlowPriority.values()) {
+            // Select all SGSs which have the current priority
+            List<SGService> currSGSs = this.sgServices.stream().filter(sgService -> sgService.getPriority() == prio).toList();
+
+            // Add all flows of this priority to the network
+            this.addFlowsToSG(this.serverGraph, currSGSs, -1, false);
+
+            // Change the multiplexing technology - only valid for highest prio
+            if (!highest_prio_finished){
+                analysisConfig.enforceMultiplexing(AnalysisConfig.MultiplexingEnforcement.GLOBAL_FIFO);
+                highest_prio_finished = true;
+            }
+            else {
+                analysisConfig.enforceMultiplexing(AnalysisConfig.MultiplexingEnforcement.GLOBAL_ARBITRARY);
+            }
+
+            // Analyze performance of those flows
+            for (SGService sgs_prio : currSGSs) {
+                double maxDelay = 0;
+                System.out.printf("--- Analyzing SGS \"%s\" ---%n", sgs_prio.getName());
+                experimentLog.add(sgs_prio.getName());
+                for (Flow foi : sgs_prio.getFlows()) {
+                    System.out.printf("- Analyzing flow \"%s\" -%n", foi);
+                    try {
+                        TandemAnalysis ncanalysis = switch (experimentConfig.ncAnalysisType) {
+                            case TFA -> TandemAnalysis.performTfaEnd2End(this.serverGraph, analysisConfig, foi);
+                            case SFA -> TandemAnalysis.performSfaEnd2End(this.serverGraph, analysisConfig, foi);
+                            case PMOO -> TandemAnalysis.performPmooEnd2End(this.serverGraph, analysisConfig, foi);
+                            case TMA -> new TandemMatchingAnalysis(this.serverGraph, analysisConfig);
+                        };
+                        // TMA doesn't have the convenience function
+                        if (experimentConfig.ncAnalysisType == TandemAnalysis.Analyses.TMA) {
+                            ncanalysis.performAnalysis(foi);
+                        }
+                        // Get the foi delay
+                        double foi_delay = ncanalysis.getDelayBound().doubleValue(); // delay is in s
+                        // Calculate propagation delay (if no propagation delay is desired, configuration value is set to 0)
+                        double prop_delay = experimentConfig.propagationDelay * foi.getPath().numServers();
+                        // Add propagation delay to delay bound
+                        foi_delay += prop_delay;
+                        // Print the end-to-end delay bound
+                        System.out.printf("delay bound     : %.2fms %n", foi_delay * 1000);     // Convert s to ms
+//                        System.out.printf("backlog bound   : %.2f %n", sfa.getBacklogBound().doubleValue());
+                        experimentLog.add(String.valueOf(foi_delay * 1000));
+                        // compute service max flow delay
+                        maxDelay = Math.max(foi_delay, maxDelay);
+                    } catch (Exception e) {
+                        // Here we land e.g. when we have PMOO & FIFO!
+                        System.out.println(experimentConfig.ncAnalysisType + " analysis failed");
+                        e.printStackTrace();
+                        experimentLog.add("-1");
+                    }
+                }
+                System.out.printf("Max service delay for %s is %.2fms (deadline: %.2fms) %n", sgs_prio.getName(), maxDelay * 1000, sgs_prio.getDeadline() * 1000);
+                if (sgs_prio.getDeadline() < maxDelay) {
+                    System.err.printf("Service %s deadline not met (%.2fms/%.2fms) %n", sgs_prio.getName(), maxDelay * 1000, sgs_prio.getDeadline() * 1000);
+                    delayTorn = true;
+                }
+            }
+        }
+        return delayTorn;
+    }
+
+    /**
+     * Function used to remove all Flows from the current ServerGraph and
+     * also remove all references made inside the SGService class
+     */
+    private void removeFlows() throws Exception {
+        for (Flow flow : this.serverGraph.getFlows()){
+            this.serverGraph.removeFlow(flow);
+        }
+        sgServices.forEach(SGService::resetFlowList);
     }
 
     /**
@@ -494,7 +586,7 @@ public class NCEntryPoint {
         }
 
         for (int nmbFlow = 1; nmbFlow <= maxFlow; nmbFlow++) {
-            addFlowsToSG(sg, sgServiceList, nmbFlow);
+            addFlowsToSG(sg, sgServiceList, nmbFlow, false);
             // Safe the server graph
             this.serverGraph = sg;
             System.out.printf("%d Flows %n", sg.getFlows().size());
@@ -560,7 +652,7 @@ public class NCEntryPoint {
                 if (curr_depth >= max_depth) {
                     // Do the final computation
                     this.sgServices = sgServicesCompare;
-                    addFlowsToSG(sg, sgServicesCompare, -1);
+                    addFlowsToSG(sg, sgServicesCompare, -1, false);
                     // Safe the server graph
                     this.serverGraph = sg;
                     System.out.printf("%d Flows %n", sg.getFlows().size());
@@ -687,7 +779,9 @@ public class NCEntryPoint {
         List<List<String>> path_list = new ArrayList<>();
         path_list.add(Arrays.asList("F1", "H1" , "S1" ));
 
-        entryPoint.addSGService("SGTest", "S1", 255, 50, 1000, path_list, 0);
+        entryPoint.addSGService("SGTest_high", "S1", 255, 50, 1000, path_list, 0);
+        entryPoint.addSGService("SGTest_med", "S1", 255, 50, 1000, path_list, 1);
+        entryPoint.addSGService("SGTest_low", "S1", 255, 50, 1000, path_list, 2);
         entryPoint.createNCNetwork();
         entryPoint.calculateNCDelays();
     }
