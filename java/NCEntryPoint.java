@@ -386,61 +386,81 @@ public class NCEntryPoint {
         }
         experimentConfig.outputConfig();
         experimentConfig.writeConfiginBuffer(experimentLog);
-        boolean delayTorn = false;
         try {
             System.out.printf("------ Starting NC Analysis using " + experimentConfig.ncAnalysisType + " ------%n");
             if(experimentConfig.schedulingPolicy == ExperimentConfig.SchedulingPolicy.SP){
                 return calculate_SP_Delays(configuration, experimentConfig, experimentLog);
             }
-            for (SGService sgs : sgServices) {
-                double maxDelay = 0;
-                System.out.printf("--- Analyzing SGS \"%s\" ---%n", sgs.getName());
-                experimentLog.add(sgs.getName());
-                for (Flow foi : sgs.getFlows()) {
-                    System.out.printf("- Analyzing flow \"%s\" -%n", foi);
-                    try {
-                        TandemAnalysis ncanalysis = switch (experimentConfig.ncAnalysisType) {
-                            case TFA -> TandemAnalysis.performTfaEnd2End(this.serverGraph, configuration, foi);
-                            case SFA -> TandemAnalysis.performSfaEnd2End(this.serverGraph, configuration, foi);
-                            case PMOO -> TandemAnalysis.performPmooEnd2End(this.serverGraph, configuration, foi);
-                            case TMA -> new TandemMatchingAnalysis(this.serverGraph, configuration);
-                        };
-                        // TMA doesn't have the convenience function
-                        if (experimentConfig.ncAnalysisType == TandemAnalysis.Analyses.TMA) {
-                            ncanalysis.performAnalysis(foi);
-                        }
-                        // Get the foi delay
-                        double foi_delay = ncanalysis.getDelayBound().doubleValue(); // delay is in s
-                        // Calculate propagation delay (if no propagation delay is desired, configuration value is set to 0)
-                        double prop_delay = experimentConfig.propagationDelay * foi.getPath().numServers();
-                        // Add propagation delay to delay bound
-                        foi_delay += prop_delay;
-                        // Print the end-to-end delay bound
-                        System.out.printf("delay bound     : %.2fms %n", foi_delay * 1000);     // Convert s to ms
-//                        System.out.printf("backlog bound   : %.2f %n", sfa.getBacklogBound().doubleValue());
-                        experimentLog.add(String.valueOf(foi_delay * 1000));
-                        // compute service max flow delay
-                        maxDelay = Math.max(foi_delay, maxDelay);
-                    } catch (Exception e) {
-                        // Here we land e.g. when we have PMOO & FIFO!
-                        System.out.println(experimentConfig.ncAnalysisType + " analysis failed");
-                        e.printStackTrace();
-                        experimentLog.add("-1");
-                    }
-                }
-                System.out.printf("Max service delay for %s is %.2fms (deadline: %.2fms) %n", sgs.getName(), maxDelay * 1000, sgs.getDeadline() * 1000);
-                if (sgs.getDeadline() < maxDelay) {
-                    System.err.printf("Service %s deadline not met (%.2fms/%.2fms) %n", sgs.getName(), maxDelay * 1000, sgs.getDeadline() * 1000);
-                    delayTorn = true;
-                }
-            }
-            return delayTorn;
+            return conductNC_Analysis(experimentLog, configuration, sgServices, experimentConfig);
         } catch (StackOverflowError e) {
             System.err.println("Stackoverflow error detected! Possible reason: Cyclic dependency in network.");
             return true;
         }
     }
 
+    /**
+     * Helper function for conducting the DiscoDNC network analysis for every specified flow saved in sgServices
+     * @param experimentLog     List<String> to add the output results into. Intended for CSV usage.
+     * @param analysisConfig    DiscoDNC analysis configuration
+     * @param sgServices        SGSs to be analyzed
+     * @param experimentConfig  Overall experimentConfiguration with the parameters
+     * @return boolean if one of the delay constraints is torn
+     */
+    private boolean conductNC_Analysis(List<String> experimentLog, AnalysisConfig analysisConfig, List<SGService> sgServices, ExperimentConfig experimentConfig) {
+        boolean delayTorn = false;
+        for (SGService sgs : sgServices) {
+            double maxDelay = 0;
+            System.out.printf("--- Analyzing SGS \"%s\" ---%n", sgs.getName());
+            experimentLog.add(sgs.getName());
+            for (Flow foi : sgs.getFlows()) {
+                System.out.printf("- Analyzing flow \"%s\" -%n", foi);
+                try {
+                    TandemAnalysis ncanalysis = switch (experimentConfig.ncAnalysisType) {
+                        case TFA -> TandemAnalysis.performTfaEnd2End(this.serverGraph, analysisConfig, foi);
+                        case SFA -> TandemAnalysis.performSfaEnd2End(this.serverGraph, analysisConfig, foi);
+                        case PMOO -> TandemAnalysis.performPmooEnd2End(this.serverGraph, analysisConfig, foi);
+                        case TMA -> new TandemMatchingAnalysis(this.serverGraph, analysisConfig);
+                    };
+                    // TMA doesn't have the convenience function
+                    if (experimentConfig.ncAnalysisType == TandemAnalysis.Analyses.TMA) {
+                        ncanalysis.performAnalysis(foi);
+                    }
+                    // Get the foi delay
+                    double foi_delay = ncanalysis.getDelayBound().doubleValue(); // delay is in s
+
+                    // Calculate propagation delay (if no propagation delay is desired, configuration value is set to 0)
+                    double prop_delay = experimentConfig.propagationDelay * foi.getPath().numServers();
+                    // Add propagation delay to delay bound
+                    foi_delay += prop_delay;
+                    // Print the end-to-end delay bound
+                    System.out.printf("delay bound     : %.2fms %n", foi_delay * 1000);     // Convert s to ms
+//                        System.out.printf("backlog bound   : %.2f %n", sfa.getBacklogBound().doubleValue());
+                    experimentLog.add(String.valueOf(foi_delay * 1000));
+                    // compute service max flow delay
+                    maxDelay = Math.max(foi_delay, maxDelay);
+                } catch (Exception e) {
+                    // Here we land e.g. when we have PMOO & FIFO!
+                    System.out.println(experimentConfig.ncAnalysisType + " analysis failed");
+                    e.printStackTrace();
+                    experimentLog.add("-1");
+                }
+            }
+            System.out.printf("Max service delay for %s is %.2fms (deadline: %.2fms) %n", sgs.getName(), maxDelay * 1000, sgs.getDeadline() * 1000);
+            if (sgs.getDeadline() < maxDelay) {
+                System.err.printf("Service %s deadline not met (%.2fms/%.2fms) %n", sgs.getName(), maxDelay * 1000, sgs.getDeadline() * 1000);
+                delayTorn = true;
+            }
+        }
+        return delayTorn;
+    }
+
+    /**
+     * Function to perform an NC analysis for strict priority scheduling, following the step-by-step algorithm
+     * @param analysisConfig    DiscoDNC network analysis configuration
+     * @param experimentConfig  Overall experiment configuration, containing the parameters
+     * @param experimentLog     List<String> to add the output results into. Intended for CSV usage.
+     * @return boolean if one of the delay constraints is torn
+     */
     private boolean calculate_SP_Delays(AnalysisConfig analysisConfig, ExperimentConfig experimentConfig, List<String> experimentLog) {
         // First: Delete all present flows from the serverGraph
         try {
@@ -468,48 +488,9 @@ public class NCEntryPoint {
             }
 
             // Analyze performance of those flows
-            for (SGService sgs_prio : currSGSs) {
-                double maxDelay = 0;
-                System.out.printf("--- Analyzing SGS \"%s\" ---%n", sgs_prio.getName());
-                experimentLog.add(sgs_prio.getName());
-                for (Flow foi : sgs_prio.getFlows()) {
-                    System.out.printf("- Analyzing flow \"%s\" -%n", foi);
-                    try {
-                        TandemAnalysis ncanalysis = switch (experimentConfig.ncAnalysisType) {
-                            case TFA -> TandemAnalysis.performTfaEnd2End(this.serverGraph, analysisConfig, foi);
-                            case SFA -> TandemAnalysis.performSfaEnd2End(this.serverGraph, analysisConfig, foi);
-                            case PMOO -> TandemAnalysis.performPmooEnd2End(this.serverGraph, analysisConfig, foi);
-                            case TMA -> new TandemMatchingAnalysis(this.serverGraph, analysisConfig);
-                        };
-                        // TMA doesn't have the convenience function
-                        if (experimentConfig.ncAnalysisType == TandemAnalysis.Analyses.TMA) {
-                            ncanalysis.performAnalysis(foi);
-                        }
-                        // Get the foi delay
-                        double foi_delay = ncanalysis.getDelayBound().doubleValue(); // delay is in s
-                        // Calculate propagation delay (if no propagation delay is desired, configuration value is set to 0)
-                        double prop_delay = experimentConfig.propagationDelay * foi.getPath().numServers();
-                        // Add propagation delay to delay bound
-                        foi_delay += prop_delay;
-                        // Print the end-to-end delay bound
-                        System.out.printf("delay bound     : %.2fms %n", foi_delay * 1000);     // Convert s to ms
-//                        System.out.printf("backlog bound   : %.2f %n", sfa.getBacklogBound().doubleValue());
-                        experimentLog.add(String.valueOf(foi_delay * 1000));
-                        // compute service max flow delay
-                        maxDelay = Math.max(foi_delay, maxDelay);
-                    } catch (Exception e) {
-                        // Here we land e.g. when we have PMOO & FIFO!
-                        System.out.println(experimentConfig.ncAnalysisType + " analysis failed");
-                        e.printStackTrace();
-                        experimentLog.add("-1");
-                    }
-                }
-                System.out.printf("Max service delay for %s is %.2fms (deadline: %.2fms) %n", sgs_prio.getName(), maxDelay * 1000, sgs_prio.getDeadline() * 1000);
-                if (sgs_prio.getDeadline() < maxDelay) {
-                    System.err.printf("Service %s deadline not met (%.2fms/%.2fms) %n", sgs_prio.getName(), maxDelay * 1000, sgs_prio.getDeadline() * 1000);
-                    delayTorn = true;
-                }
-            }
+            boolean prioDelayTorn = conductNC_Analysis(experimentLog, analysisConfig, currSGSs, experimentConfig);
+            // Update delayTorn only to true
+            delayTorn = delayTorn | prioDelayTorn;
         }
         return delayTorn;
     }
