@@ -343,37 +343,82 @@ public class NCEntryPoint {
      */
     @SuppressWarnings("unused")
     public void experimentAllCombinations() {
+        // The experimentLog is one List<String> with each entry being a String "," separated containing each experiment
         List<String> experimentLog = new ArrayList<>();
-        for (TandemAnalysis.Analyses anaType : TandemAnalysis.Analyses.values()) {
-            if ((anaType == TandemAnalysis.Analyses.PMOO) || (anaType == TandemAnalysis.Analyses.TMA)) {
-                // PMOO & TMA don't support FIFO multiplexing
-                experimentConfig.multiplexing = AnalysisConfig.Multiplexing.ARBITRARY;
-            }
-            experimentConfig.ncAnalysisType = anaType;
-            for (var arrBoundType : AnalysisConfig.ArrivalBoundMethod.values()) {
-                List<String> buffer = new ArrayList<>();
-                experimentConfig.arrivalBoundMethod = arrBoundType;
-                // conduct the experiment with the newly defined configurations
-                calculateNCDelays(buffer);
-                if (experimentLog.isEmpty()) {
-                    experimentLog = buffer;
-                } else {
-                    // Concat the new results to form one big CSV
-                    for (int i = 0; i < experimentLog.size(); i++) {
-                        experimentLog.set(i, experimentLog.get(i) + ',' + buffer.get(i));
+        // Iterate over every multiplexing technique (FIFO & ARBITRARY)
+        for (var multiplexing : AnalysisConfig.Multiplexing.values()) {
+            experimentConfig.multiplexing = multiplexing;
+
+            // Iterate over every network analysis method
+            for (TandemAnalysis.Analyses anaType : TandemAnalysis.Analyses.values()) {
+                if (multiplexing == AnalysisConfig.Multiplexing.FIFO &&
+                        ((anaType == TandemAnalysis.Analyses.PMOO) || (anaType == TandemAnalysis.Analyses.TMA))) {
+                    // PMOO & TMA don't support FIFO multiplexing, skip them
+                    continue;
+                }
+                experimentConfig.ncAnalysisType = anaType;
+
+                // Iterate over every Arrival bounding method
+                for (var arrBoundType : AnalysisConfig.ArrivalBoundMethod.values()) {
+                    // SEGR_TM lets the program crash
+                    if (arrBoundType == AnalysisConfig.ArrivalBoundMethod.SEGR_TM) {
+                        continue;
+                    }
+                    // These arrival boundings are not available with FIFO
+                    if(multiplexing == AnalysisConfig.Multiplexing.FIFO &&
+                            (arrBoundType == AnalysisConfig.ArrivalBoundMethod.AGGR_TM ||
+                             arrBoundType == AnalysisConfig.ArrivalBoundMethod.SEGR_PMOO ||
+                             arrBoundType == AnalysisConfig.ArrivalBoundMethod.AGGR_PMOO)) {
+                        continue;
+                    }
+                    experimentConfig.arrivalBoundMethod = arrBoundType;
+
+                    // Iterate over every scheduling policy
+                    for (var schedPol : ExperimentConfig.SchedulingPolicy.values()) {
+                        experimentConfig.schedulingPolicy = schedPol;
+
+                        // Reset the old servergraph, we need to modify the service curves and flow paths
+                        // according to the used scheduler
+                        resetServerGraph();
+
+                        // Create the new NC network
+                        createNCNetwork();
+
+                        // conduct the experiment with the newly defined configurations
+                        List<String> buffer = new ArrayList<>();
+                        calculateNCDelays(buffer);
+
+                        // Save the new experiment results.
+                        if (experimentLog.isEmpty()) {
+                            experimentLog = buffer;
+                        } else {
+                            // Concat the new results to form one big CSV
+                            for (int i = 0; i < experimentLog.size(); i++) {
+                                experimentLog.set(i, experimentLog.get(i) + ';' + buffer.get(i));
+                            }
+                        }
                     }
                 }
             }
         }
+        exportResultToCSV(experimentLog, "experiments", "experiment");
+    }
+
+    private static void exportResultToCSV(List<String> experimentLog, String folderName, String prefix) {
         // Export experimentLog to a file
         try {
             String fileSuffix = new SimpleDateFormat("yyyyMMddHHmmss").format(new Date());
             // Create the experiments' subfolder, if not present
-            File directory = new File("experiments");
+            File directory = new File(folderName);
             if (!directory.exists()) {
                 boolean success = directory.mkdir();
+                if (!success){
+                    System.err.println("Error when creating folder for exporting results. Aborting export.");
+                    return;
+                }
             }
-            FileWriter writer = new FileWriter("experiments/experimentLog_" + fileSuffix + ".csv");
+            String filename = folderName + "/" + prefix + "Log_" + fileSuffix + ".csv";
+            FileWriter writer = new FileWriter(filename);
             for (String str : experimentLog) {
                 writer.write(str + System.lineSeparator());
             }
@@ -556,6 +601,35 @@ public class NCEntryPoint {
             this.serverGraph.removeFlow(flow);
         }
         sgServices.forEach(SGService::resetFlowList);
+    }
+
+    /**
+     * Helper function to remove all servers of the servergraph
+     * and delete all references inside the edgeList
+     *
+     * @throws Exception Exception if the server would not be present (should not be the case)
+     */
+    private void removeAllServers() throws Exception {
+        for (Server server : this.serverGraph.getServers()) {
+            this.serverGraph.removeServer(server);
+        }
+        edgeList.forEach(Edge::resetServerList);
+    }
+
+    /**
+     * Helper function used to reset the Server graph
+     * and all references made inside the edgeList
+     * and SGServices.
+     * Preserves the initial definition of edges and services.
+     */
+    private void resetServerGraph(){
+        try {
+            removeAllFlows();
+            removeAllServers();
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+        this.serverGraph = new ServerGraph();
     }
 
     /**

@@ -52,4 +52,7 @@ public class Edge {
             this.prio_servers.set(prio.ordinal(), server);
         }
     }
+    public void resetServerList(){
+        this.prio_servers.clear();
+    }
 }
