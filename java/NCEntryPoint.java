@@ -309,7 +309,8 @@ public class NCEntryPoint {
         addTurnsToSG(sg);
 
         // Add all flows to the network
-        addFlowsToSG(sg, sgServices, -1, true);
+        boolean considerPrios = experimentConfig.schedulingPolicy != ExperimentConfig.SchedulingPolicy.None;
+        addFlowsToSG(sg, sgServices, -1, considerPrios);
         this.serverGraph = sg;
         System.out.printf("%d Flows %n", sg.getFlows().size());
     }
