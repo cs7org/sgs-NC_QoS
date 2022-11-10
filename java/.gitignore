@@ -28,3 +28,4 @@ hs_err_pid*
 
 # generated folder for experiment logs
 /experiments/
+/calcs/
