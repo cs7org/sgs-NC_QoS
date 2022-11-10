@@ -455,7 +455,7 @@ public class NCEntryPoint {
     private boolean calculate_SP_Delays(AnalysisConfig analysisConfig, ExperimentConfig experimentConfig, List<String> experimentLog) {
         // First: Delete all present flows from the serverGraph
         try {
-            removeFlows();
+            removeAllFlows();
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
@@ -470,9 +470,9 @@ public class NCEntryPoint {
             // Add all flows of this priority to the network
             this.addFlowsToSG(this.serverGraph, currSGSs, -1, false);
 
-            // Change the multiplexing technology - only valid for highest prio
+            // Change the multiplexing technology - only for the highest priority we can use the multiplexing technology
+            // specified in the experimentConfig, for other priorities we have to use Arbitrary
             if (!highest_prio_finished) {
-                analysisConfig.enforceMultiplexing(AnalysisConfig.MultiplexingEnforcement.GLOBAL_FIFO);
                 highest_prio_finished = true;
             } else {
                 analysisConfig.enforceMultiplexing(AnalysisConfig.MultiplexingEnforcement.GLOBAL_ARBITRARY);
@@ -551,7 +551,7 @@ public class NCEntryPoint {
      * Function used to remove all Flows from the current ServerGraph and
      * also remove all references made inside the SGService class
      */
-    private void removeFlows() throws Exception {
+    private void removeAllFlows() throws Exception {
         for (Flow flow : this.serverGraph.getFlows()) {
             this.serverGraph.removeFlow(flow);
         }
