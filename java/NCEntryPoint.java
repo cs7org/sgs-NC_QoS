@@ -391,8 +391,10 @@ public class NCEntryPoint {
      */
     @SuppressWarnings("UnusedReturnValue")
     public boolean calculateNCDelays() {
-        List<String> dummyExperimentLog = new ArrayList<>();
-        return calculateNCDelays(dummyExperimentLog);
+        List<String> experimentLog = new ArrayList<>();
+        boolean delayTorn =  calculateNCDelays(experimentLog);
+        exportResultToCSV(experimentLog, "calcs", "bounding");
+        return delayTorn;
     }
 
     /**
@@ -420,10 +422,25 @@ public class NCEntryPoint {
             if (experimentConfig.schedulingPolicy == ExperimentConfig.SchedulingPolicy.SP) {
                 return calculate_SP_Delays(configuration, experimentConfig, experimentLog);
             }
-            return conductNC_Analysis(experimentLog, configuration, sgServices, experimentConfig);
+            Map<String, List<Double>> perf_results = new HashMap<>();
+            boolean delayTorn = conductNC_Analysis(perf_results, configuration, sgServices, experimentConfig);
+            convertPerfResultsExpLog(experimentLog, perf_results);
+
+            return  delayTorn;
         } catch (StackOverflowError e) {
             System.err.println("Stackoverflow error detected! Possible reason: Cyclic dependency in network.");
             return true;
+        }
+    }
+
+    private static void convertPerfResultsExpLog(List<String> experimentLog, Map<String, List<Double>> perf_results) {
+        List<String> sgs_keys = new ArrayList<>(perf_results.keySet());
+        Collections.sort(sgs_keys);
+        for (var sgs : sgs_keys){
+            experimentLog.add(sgs);
+            for (Double flow_delay : perf_results.get(sgs)) {
+                experimentLog.add(String.format("%.3f", flow_delay));
+            }
         }
     }
 
@@ -445,6 +462,7 @@ public class NCEntryPoint {
         // Procedure: add highest prio, calculate delay. Add next prio, calculate again
         boolean highest_prio_finished = false;
         boolean delayTorn = false;
+        Map<String, List<Double>> perf_results = new HashMap<>();
         for (FlowPriority prio : FlowPriority.values()) {
             // Select all SGSs which have the current priority
             List<SGService> currSGSs = this.sgServices.stream().filter(sgService -> sgService.getPriority() == prio).toList();
@@ -461,28 +479,30 @@ public class NCEntryPoint {
             }
 
             // Analyze performance of those flows
-            boolean prioDelayTorn = conductNC_Analysis(experimentLog, analysisConfig, currSGSs, experimentConfig);
+            boolean prioDelayTorn = conductNC_Analysis(perf_results, analysisConfig, currSGSs, experimentConfig);
             // Update delayTorn only to true
             delayTorn = delayTorn | prioDelayTorn;
         }
+        convertPerfResultsExpLog(experimentLog, perf_results);
         return delayTorn;
     }
 
     /**
      * Helper function for conducting the DiscoDNC network analysis for every specified flow saved in sgServices
      *
-     * @param experimentLog    List<String> to add the output results into. Intended for CSV usage.
+     * @param results          Hashmap into which the results of the different SGSs will be stored in.
      * @param analysisConfig   DiscoDNC analysis configuration
      * @param sgServices       SGSs to be analyzed
      * @param experimentConfig Overall experimentConfiguration with the parameters
      * @return boolean if one of the delay constraints is torn
      */
-    private boolean conductNC_Analysis(List<String> experimentLog, AnalysisConfig analysisConfig, List<SGService> sgServices, ExperimentConfig experimentConfig) {
+    private boolean conductNC_Analysis(Map<String, List<Double>> results, AnalysisConfig analysisConfig, List<SGService> sgServices, ExperimentConfig experimentConfig) {
         boolean delayTorn = false;
         for (SGService sgs : sgServices) {
             double maxDelay = 0;
             System.out.printf("--- Analyzing SGS \"%s\" ---%n", sgs.getName());
-            experimentLog.add(sgs.getName());
+
+            List<Double> flowDelays = new ArrayList<>();
             for (Flow foi : sgs.getFlows()) {
                 System.out.printf("- Analyzing flow \"%s\" -%n", foi);
                 try {
@@ -505,17 +525,19 @@ public class NCEntryPoint {
                     foi_delay += prop_delay;
                     // Print the end-to-end delay bound
                     System.out.printf("delay bound     : %.2fms %n", foi_delay * 1000);     // Convert s to ms
-//                        System.out.printf("backlog bound   : %.2f %n", sfa.getBacklogBound().doubleValue());
-                    experimentLog.add(String.valueOf(foi_delay * 1000));
+//                  System.out.printf("backlog bound   : %.2f %n", sfa.getBacklogBound().doubleValue());
+
+                    flowDelays.add(foi_delay * 1000);   // Convert s to ms
                     // compute service max flow delay
                     maxDelay = Math.max(foi_delay, maxDelay);
                 } catch (Exception e) {
                     // Here we land e.g. when we have PMOO & FIFO!
                     System.out.println(experimentConfig.ncAnalysisType + " analysis failed");
                     e.printStackTrace();
-                    experimentLog.add("-1");
+                    flowDelays.add(-1.0);
                 }
             }
+            results.put(sgs.getName(), flowDelays);
             System.out.printf("Max service delay for %s is %.2fms (deadline: %.2fms) %n", sgs.getName(), maxDelay * 1000, sgs.getDeadline() * 1000);
             if (sgs.getDeadline() < maxDelay) {
                 System.err.printf("Service %s deadline not met (%.2fms/%.2fms) %n", sgs.getName(), maxDelay * 1000, sgs.getDeadline() * 1000);
