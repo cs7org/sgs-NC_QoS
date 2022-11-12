@@ -18,10 +18,12 @@ import java.util.stream.Collectors;
 
 /**
  * Order of calls to make for a fully functioning NC calculation:
- * 1. addEdge() [multiple times] - Add your edges of the network to the Servergraph (Edge = Output-link of one hop)
- * 2. addSGService() [multiple times] - Add all the SGS that will use the network. Flows are aggregated in here.
- * 3. createNCNetwork() [once] - Create the final Servergraph with every connection in it.
- * 4. calculateNCDelays() - Call this function for calculating the final delays per flow.
+ * <p><ol>
+ * <li> {@link #addEdge(String, String, double, double)} [multiple times] - Add your edges of the network to the Servergraph (Edge = Output-link of one hop)
+ * <li> {@link #addSGService(String, String, int, int, double, List, int)} [multiple times] - Add all the SGS that will use the network. Flows are aggregated in here.
+ * <li> {@link #createNCNetwork()} [once] - Create the final Servergraph with every connection in it.
+ * <li> {@link #calculateNCDelays()} - Call this function for calculating the final delays per flow.
+ * </ol>
  */
 
 public class NCEntryPoint {
@@ -175,7 +177,7 @@ public class NCEntryPoint {
 
     /**
      * Function used to conduct tests for the service curves of a simple one hop, two server network
-     * The following results should be acquired (same result for SFA & PMOO):
+     * The following results should be acquired (same result for SFA and PMOO):
      * SP:
      * SFA: 5100ms
      * TFA: 6693,75ms
@@ -274,7 +276,7 @@ public class NCEntryPoint {
 
     /**
      * This function creates the final ServerGraph aka combines all the network elements in one network.
-     * Has to be called last, AFTER calling addEdge & addSGService for adding the network elements.
+     * Has to be called last, AFTER calling addEdge and addSGService for adding the network elements.
      */
     @SuppressWarnings("unused")
     public void createNCNetwork() {
@@ -430,7 +432,7 @@ public class NCEntryPoint {
 
     /**
      * Function called by Python part.
-     * For details see calculateNCDelays(List<String>)
+     * For details see {@link #calculateNCDelays(List)}
      *
      * @return boolean if one of the delay constraints is torn
      */
@@ -446,7 +448,7 @@ public class NCEntryPoint {
      * Function to calculate the performance bounds for every flow and output the result onto the Console and into a
      * given experimentLog
      *
-     * @param experimentLog List<String> to add the output results into. Intended for CSV usage.
+     * @param experimentLog List to add the output results into. Intended for CSV usage.
      * @return boolean if one of the delay constraints is torn
      */
     public boolean calculateNCDelays(List<String> experimentLog) {
@@ -494,7 +496,7 @@ public class NCEntryPoint {
      *
      * @param analysisConfig   DiscoDNC network analysis configuration
      * @param experimentConfig Overall experiment configuration, containing the parameters
-     * @param experimentLog    List<String> to add the output results into. Intended for CSV usage.
+     * @param experimentLog    List to add the output results into. Intended for CSV usage.
      * @return boolean if one of the delay constraints is torn
      */
     private boolean calculate_SP_Delays(AnalysisConfig analysisConfig, ExperimentConfig experimentConfig, List<String> experimentLog) {
@@ -595,6 +597,7 @@ public class NCEntryPoint {
     /**
      * Function used to remove all Flows from the current ServerGraph and
      * also remove all references made inside the SGService class
+     * @throws Exception if Flow is not included in the server graph (should not be the case)
      */
     private void removeAllFlows() throws Exception {
         for (Flow flow : this.serverGraph.getFlows()) {
@@ -690,7 +693,7 @@ public class NCEntryPoint {
     /**
      * Test case which does a network calculus analysis after adding each flow.
      *
-     * @param sg            ServerGraph which includes the servers & turns already
+     * @param sg            ServerGraph which includes the servers and turns already
      * @param sgServiceList List of all available SGServices from which the flows shall be derived.
      */
     @SuppressWarnings("unused")
@@ -727,7 +730,7 @@ public class NCEntryPoint {
     /**
      * Test case which does a network calculus analysis after adding each flow.
      *
-     * @param sg            ServerGraph which includes the servers & turns already
+     * @param sg            ServerGraph which includes the servers and turns already
      * @param sgServiceList List of all available SGServices from which the flows shall be derived.
      */
     @SuppressWarnings("unused")
@@ -798,7 +801,7 @@ public class NCEntryPoint {
      * Special test case for the presentation scenario, using the "SE" service, path "F23 - S1" and
      * the "LM" service, path "F12 - S2". Only adding those two flows, results in a stackoverflow.
      *
-     * @param sg ServerGraph which includes the servers & turns already
+     * @param sg ServerGraph which includes the servers and turns already
      */
     @SuppressWarnings("unused")
     private void testBidirectionalFlow(ServerGraph sg) {
