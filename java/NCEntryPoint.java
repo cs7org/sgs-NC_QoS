@@ -164,7 +164,7 @@ public class NCEntryPoint {
             latency = expConfig.maxPacketSize / edge.getBitrate();
         }
 
-        if (expConfig.serviceCurveType == ExperimentConfig.ServiceCurveTypes.RateLatency) {
+        if (expConfig.useGivenLinkDelay) {
             //TODO: Talk with Kai-Steffen if we should delete that
             latency += edge.getLatency();
         }
