@@ -346,7 +346,7 @@ public class NCEntryPoint {
     @SuppressWarnings("unused")
     public void experimentAllCombinations() {
         // The experimentLog is one List<String> with each entry being a String "," separated containing each experiment
-        List<String> experimentLog = new ArrayList<>();
+        List<List<String>> experimentLog = new ArrayList<>();
         // Iterate over every multiplexing technique (FIFO & ARBITRARY)
         for (var multiplexing : AnalysisConfig.Multiplexing.values()) {
             experimentConfig.multiplexing = multiplexing;
@@ -389,24 +389,16 @@ public class NCEntryPoint {
                         // conduct the experiment with the newly defined configurations
                         List<String> buffer = new ArrayList<>();
                         calculateNCDelays(buffer);
-
-                        // Save the new experiment results.
-                        if (experimentLog.isEmpty()) {
-                            experimentLog = buffer;
-                        } else {
-                            // Concat the new results to form one big CSV
-                            for (int i = 0; i < experimentLog.size(); i++) {
-                                experimentLog.set(i, experimentLog.get(i) + ';' + buffer.get(i));
-                            }
-                        }
+                        experimentLog.add(buffer);
                     }
                 }
             }
         }
+        experimentConfig.insertConfigNamesInFront(experimentLog);
         exportResultToCSV(experimentLog, "experiments", "experiment");
     }
 
-    private static void exportResultToCSV(List<String> experimentLog, String folderName, String prefix) {
+    private static void exportResultToCSV(List<List<String>> experimentLog, String folderName, String prefix) {
         // Export experimentLog to a file
         try {
             String fileSuffix = new SimpleDateFormat("yyyyMMddHHmmss").format(new Date());
@@ -421,8 +413,9 @@ public class NCEntryPoint {
             }
             String filename = folderName + "/" + prefix + "Log_" + fileSuffix + ".csv";
             FileWriter writer = new FileWriter(filename);
-            for (String str : experimentLog) {
-                writer.write(str + System.lineSeparator());
+            for (List<String> row : experimentLog){
+                String row_str = String.join(";", row);
+                writer.write(row_str + System.lineSeparator());
             }
             writer.close();
         } catch (IOException e) {
@@ -438,8 +431,12 @@ public class NCEntryPoint {
      */
     @SuppressWarnings("UnusedReturnValue")
     public boolean calculateNCDelays() {
-        List<String> experimentLog = new ArrayList<>();
-        boolean delayTorn =  calculateNCDelays(experimentLog);
+        List<List<String>> experimentLog = new ArrayList<>();
+        List<String> buffer = new ArrayList<>();
+
+        boolean delayTorn =  calculateNCDelays(buffer);
+        experimentLog.add(buffer);
+        experimentConfig.insertConfigNamesInFront(experimentLog);
         exportResultToCSV(experimentLog, "calcs", "bounding");
         return delayTorn;
     }

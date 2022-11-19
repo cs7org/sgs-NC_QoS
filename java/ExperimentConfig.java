@@ -1,6 +1,7 @@
 import org.networkcalculus.dnc.AnalysisConfig;
 import org.networkcalculus.dnc.tandem.TandemAnalysis;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
@@ -28,7 +29,7 @@ public class ExperimentConfig {
     /**
      * Minimum packet size in the system. Used for the definition of WRR.
      */
-    public final int minPacketSize = 255; // [Byte]  //TODO: Change me
+    public final int minPacketSize = 64; // [Byte] Minimum Ethernet packet size.
     /**
      * How the arrival of the flows shall be modeled. Mainly Peak-rate vs TokenBucket.
      * Token-Bucket uses one l_max as bucket size.
@@ -90,6 +91,7 @@ public class ExperimentConfig {
         buffer.add(String.valueOf(useGivenLinkDelay));
         buffer.add(String.valueOf(usePacketizer));
         buffer.add(String.valueOf(maxPacketSize));
+        buffer.add(String.valueOf(minPacketSize));
         buffer.add(String.valueOf(propagationDelay));
         buffer.add(String.valueOf(arrivalCurveType));
         buffer.add(String.valueOf(multiplexing));
@@ -98,6 +100,29 @@ public class ExperimentConfig {
         buffer.add(Arrays.toString(flowQuantils));
         buffer.add(String.valueOf(arrivalBoundMethod));
         buffer.add(String.valueOf(ncAnalysisType));
+    }
+
+    /**
+     * Function used to insert the parameter names in the front of the experimentLog.
+     * @param experimentLog 2D experiment log list in which the results are already included.
+     */
+    public void insertConfigNamesInFront(List<List<String>> experimentLog){
+        List<String> exp_paras = new ArrayList<>();
+
+        exp_paras.add("Use given link delay:" );
+        exp_paras.add("Use packetizer:");
+        exp_paras.add("Max packet size:");
+        exp_paras.add("Min packet size:");
+        exp_paras.add("Propagation delay:");
+        exp_paras.add("Arrival curve type:");
+        exp_paras.add("Queue multiplexing:");
+        exp_paras.add("Scheduling policy:");
+        exp_paras.add("Flow weights:");
+        exp_paras.add("Flow quantils:");
+        exp_paras.add("Arrival bounding method:");
+        exp_paras.add("NC analysis method:");
+
+        experimentLog.add(0, exp_paras);
     }
 
     /**
