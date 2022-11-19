@@ -461,6 +461,7 @@ public class NCEntryPoint {
         }
         experimentConfig.outputConfig();
         experimentConfig.writeConfiginBuffer(experimentLog);
+        expLog_addSGSPrios(experimentLog, sgServices);
         try {
             System.out.printf("------ Starting NC Analysis using " + experimentConfig.ncAnalysisType + " ------%n");
             if (experimentConfig.schedulingPolicy == ExperimentConfig.SchedulingPolicy.SP) {
@@ -477,10 +478,34 @@ public class NCEntryPoint {
         }
     }
 
+    /**
+     * Add the priorities of the different SGS to the experiment log.
+     * @param experimentLog experiment log in which the priorities shall be added
+     * @param sgServices Considered SGS from where the priorities shall be gathered
+     */
+    private static void expLog_addSGSPrios(List<String> experimentLog, List<SGService> sgServices) {
+        StringBuilder result = new StringBuilder();
+        String prefix = "";
+        for (var sgs : sgServices){
+            result.append(prefix);
+            result.append(sgs.getName());
+            result.append(":");
+            result.append(sgs.getPriority());
+            prefix = " - ";
+        }
+
+        experimentLog.add(result.toString());
+    }
+
+    /**
+     * Internal function for conversion between Map and CSV export.
+     * @param experimentLog CSV intended column List
+     * @param perf_results Evaluation results in map format
+     */
     private static void convertPerfResultsExpLog(List<String> experimentLog, Map<String, List<Double>> perf_results) {
         List<String> sgs_keys = new ArrayList<>(perf_results.keySet());
         Collections.sort(sgs_keys);
-        for (var sgs : sgs_keys){
+        for (String sgs : sgs_keys){
             experimentLog.add(sgs);
             for (Double flow_delay : perf_results.get(sgs)) {
                 experimentLog.add(String.format("%.3f", flow_delay));
