@@ -29,7 +29,7 @@ public class ExperimentConfig {
     /**
      * Minimum packet size in the system. Used for the definition of WRR.
      */
-    public final int minPacketSize = 64; // [Byte] Minimum Ethernet packet size.
+    public final int minPacketSize = 84; // [Byte] Minimum Ethernet packet size.
     /**
      * How the arrival of the flows shall be modeled. Mainly Peak-rate vs TokenBucket.
      * Token-Bucket uses one l_max as bucket size.
