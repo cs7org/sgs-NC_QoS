@@ -311,8 +311,11 @@ public class NCEntryPoint {
         addTurnsToSG(sg);
 
         // Add all flows to the network
-        boolean considerPrios = experimentConfig.schedulingPolicy != ExperimentConfig.SchedulingPolicy.None;
-        addFlowsToSG(sg, sgServices, -1, considerPrios);
+        FlowPriority fixedPrio = null;
+        if (experimentConfig.schedulingPolicy == ExperimentConfig.SchedulingPolicy.None){
+            fixedPrio = FlowPriority.values()[0];   // just take the first prio to add all flows to.
+        }
+        addFlowsToSG(sg, sgServices, -1, fixedPrio);
         this.serverGraph = sg;
         System.out.printf("%d Flows %n", sg.getFlows().size());
     }
@@ -522,22 +525,22 @@ public class NCEntryPoint {
      * @return boolean if one of the delay constraints is torn
      */
     private boolean calculate_SP_Delays(AnalysisConfig analysisConfig, ExperimentConfig experimentConfig, List<String> experimentLog) {
-        // First: Delete all present flows from the serverGraph
-        try {
-            removeAllFlows();
-        } catch (Exception e) {
-            throw new RuntimeException(e);
-        }
+        // First: Delete all present flows from the serverGraph (e.g. from previous analysis)
+        removeAllFlows();
         // Procedure: add highest prio, calculate delay. Add next prio, calculate again
         boolean highest_prio_finished = false;
         boolean delayTorn = false;
         Map<String, List<Double>> perf_results = new HashMap<>();
+        List<SGService> curr_SGSs = new ArrayList<>();
         for (FlowPriority prio : FlowPriority.values()) {
             // Select all SGSs which have the current priority
-            List<SGService> currSGSs = this.sgServices.stream().filter(sgService -> sgService.getPriority() == prio).toList();
+            List<SGService> currprioSGSs = this.sgServices.stream().filter(sgService -> sgService.getPriority() == prio).toList();
+
+            // Add the new flows to the flows in the server graph.
+            curr_SGSs.addAll(currprioSGSs);
 
             // Add all flows of this priority to the network
-            this.addFlowsToSG(this.serverGraph, currSGSs, -1, false);
+            this.addFlowsToSG(this.serverGraph, curr_SGSs, -1, prio);
 
             // Change the multiplexing technology - only for the highest priority we can use the multiplexing technology
             // specified in the experimentConfig, for other priorities we have to use Arbitrary
@@ -548,9 +551,12 @@ public class NCEntryPoint {
             }
 
             // Analyze performance of those flows
-            boolean prioDelayTorn = conductNC_Analysis(perf_results, analysisConfig, currSGSs, experimentConfig);
+            boolean prioDelayTorn = conductNC_Analysis(perf_results, analysisConfig, currprioSGSs, experimentConfig);
             // Update delayTorn only to true
             delayTorn = delayTorn | prioDelayTorn;
+
+            // Delete the flows from the server graph
+            removeAllFlows();
         }
         convertPerfResultsExpLog(experimentLog, perf_results);
         return delayTorn;
@@ -619,11 +625,14 @@ public class NCEntryPoint {
     /**
      * Function used to remove all Flows from the current ServerGraph and
      * also remove all references made inside the SGService class
-     * @throws Exception if Flow is not included in the server graph (should not be the case)
      */
-    private void removeAllFlows() throws Exception {
+    private void removeAllFlows() {
         for (Flow flow : this.serverGraph.getFlows()) {
-            this.serverGraph.removeFlow(flow);
+            try {
+                this.serverGraph.removeFlow(flow);
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
         }
         sgServices.forEach(SGService::resetFlowList);
     }
@@ -631,12 +640,14 @@ public class NCEntryPoint {
     /**
      * Helper function to remove all servers of the servergraph
      * and delete all references inside the edgeList
-     *
-     * @throws Exception Exception if the server would not be present (should not be the case)
      */
-    private void removeAllServers() throws Exception {
+    private void removeAllServers(){
         for (Server server : this.serverGraph.getServers()) {
-            this.serverGraph.removeServer(server);
+            try {
+                this.serverGraph.removeServer(server);
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
         }
         edgeList.forEach(Edge::resetServerList);
     }
@@ -648,12 +659,8 @@ public class NCEntryPoint {
      * Preserves the initial definition of edges and services.
      */
     private void resetServerGraph(){
-        try {
-            removeAllFlows();
-            removeAllServers();
-        } catch (Exception e) {
-            throw new RuntimeException(e);
-        }
+        removeAllFlows();
+        removeAllServers();
         this.serverGraph = new ServerGraph();
     }
 
@@ -663,9 +670,10 @@ public class NCEntryPoint {
      * @param sg            Servergraph to add the flows to.
      * @param sgServiceList List of all available SGServices from which the flows shall be derived.
      * @param nmbFlow       number of flows which should be added. Use "-1" for all available flows.
-     * @param considerPrios If the flows shall be added to different servers of an edge, according to their priority
+     * @param fixedPrio     Use a fixed priority to choose the NC server where the flows shall be added.
+     *                      Set to "null" if the SGS priority shall be used.
      */
-    private void addFlowsToSG(ServerGraph sg, List<SGService> sgServiceList, int nmbFlow, boolean considerPrios) {
+    private void addFlowsToSG(ServerGraph sg, List<SGService> sgServiceList, int nmbFlow, FlowPriority fixedPrio) {
         // nmbFlow = -1 is used to add all available flows.
         if (nmbFlow == -1) {
             nmbFlow = Integer.MAX_VALUE;
@@ -690,10 +698,12 @@ public class NCEntryPoint {
                     edgeNodes.add(path.get(i - 1));
                     edgeNodes.add(path.get(i));
                     // Add the found edge to the dncPath
-                    if (considerPrios) {
+                    if (fixedPrio == null) {
+                        // The priority of the service shall be used
                         dncPath.add(findEdgebyNodes(edgeList, edgeNodes).getServer(service.getPriority()));
                     } else {
-                        dncPath.add(findEdgebyNodes(edgeList, edgeNodes).getServer());
+                        // A fixed value for the priority shall be used
+                        dncPath.add(findEdgebyNodes(edgeList, edgeNodes).getServer(fixedPrio));
                     }
                 }
                 // Create flow and add it to the network
@@ -727,7 +737,7 @@ public class NCEntryPoint {
         }
 
         for (int nmbFlow = 1; nmbFlow <= maxFlow; nmbFlow++) {
-            addFlowsToSG(sg, sgServiceList, nmbFlow, false);
+            addFlowsToSG(sg, sgServiceList, nmbFlow, FlowPriority.HIGH);
             // Safe the server graph
             this.serverGraph = sg;
             System.out.printf("%d Flows %n", sg.getFlows().size());
@@ -794,7 +804,7 @@ public class NCEntryPoint {
                 if (curr_depth >= max_depth) {
                     // Do the final computation
                     this.sgServices = sgServicesCompare;
-                    addFlowsToSG(sg, sgServicesCompare, -1, false);
+                    addFlowsToSG(sg, sgServicesCompare, -1, FlowPriority.HIGH);
                     // Safe the server graph
                     this.serverGraph = sg;
                     System.out.printf("%d Flows %n", sg.getFlows().size());
